@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FUTURES MONITOR</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <!-- Top Header -->
+    <header class="top-bar">
+      <div class="top-bar-left">
+        <span class="logo">MONITOR</span>
+        <span class="version">v2.6.0</span>
+        <span class="status-badge live">● LIVE</span>
+      </div>
+      <div class="top-bar-center">
+        <select id="symbol-select" class="symbol-selector">
+          <option value="BTCUSDT">BTCUSDT</option>
+          <option value="ETHUSDT">ETHUSDT</option>
+          <option value="SOLUSDT">SOLUSDT</option>
+        </select>
+      </div>
+      <div class="top-bar-right">
+        <span id="last-updated" class="timestamp">LOADING...</span>
+      </div>
+    </header>
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-header">LAYERS</div>
+        <div class="layer-item active">
+          <span class="layer-icon">●</span>
+          <span>PRICE ACTION</span>
+        </div>
+        <div class="layer-item active">
+          <span class="layer-icon">▲</span>
+          <span>DERIVATIVES</span>
+        </div>
+        <div class="layer-item active">
+          <span class="layer-icon">■</span>
+          <span>SENTIMENT</span>
+        </div>
+        <div class="layer-item active">
+          <span class="layer-icon">◆</span>
+          <span>ORDERFLOW</span>
+        </div>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-header">CANDLES</div>
+        <div class="segmented-vertical" id="candle-limit">
+          <button type="button" data-limit="24" class="active">24</button>
+          <button type="button" data-limit="48">48</button>
+          <button type="button" data-limit="96">96</button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Metrics Grid -->
+      <section class="metrics-grid" id="metric-cards"></section>
+
+      <!-- Trend Analysis -->
+      <section class="panel-tactical">
+        <div class="panel-header">
+          <span class="panel-icon">▲</span>
+          <span>TREND ANALYSIS</span>
+        </div>
+        <div class="trend-container">
+          <div id="trend-outlook" class="outlook-tactical">-</div>
+          <div class="trend-details">
+            <div id="trend-score" class="score-line"></div>
+            <div id="trend-playbook" class="playbook-text"></div>
+            <div id="trend-close-guides" class="close-guides"></div>
+            <ul id="trend-scenarios" class="scenario-list"></ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- Chart + Alerts -->
+      <section class="split-panels">
+        <div class="panel-tactical chart-panel">
+          <div class="panel-header">
+            <span class="panel-icon">◆</span>
+            <span id="chart-title">PRICE CANDLES</span>
+            <div class="chart-controls">
+              <div class="segmented-mini" id="chart-tf">
+                <button type="button" data-tf="1h" class="active">1h</button>
+                <button type="button" data-tf="4h">4h</button>
+              </div>
+            </div>
+          </div>
+          <div class="chart-container">
+            <svg id="price-chart" viewBox="0 0 480 160" preserveAspectRatio="none"></svg>
+            <div id="chart-note" class="chart-note"></div>
+          </div>
+        </div>
+        <div class="panel-tactical alerts-panel">
+          <div class="panel-header">
+            <span class="panel-icon">◎</span>
+            <span>USDC TREASURY (72H)</span>
+          </div>
+          <div class="alerts-container">
+            <ul id="trend-alerts"></ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- Signal Breakdown -->
+      <section class="panel-tactical">
+        <div class="panel-header">
+          <span class="panel-icon">■</span>
+          <span>SIGNAL BREAKDOWN</span>
+        </div>
+        <div id="signal-breakdown" class="breakdown-grid"></div>
+      </section>
+
+      <!-- Analysis Grid -->
+      <section class="analysis-grid">
+        <div class="panel-tactical">
+          <div class="panel-header">
+            <span class="panel-icon">●</span>
+            <span>PRIMARY SIGNALS</span>
+          </div>
+          <ul id="trend-reasons" class="tactical-list"></ul>
+        </div>
+        <div class="panel-tactical">
+          <div class="panel-header">
+            <span class="panel-icon">⚠</span>
+            <span>RISK NOTES</span>
+          </div>
+          <ul id="trend-risks" class="tactical-list"></ul>
+        </div>
+      </section>
+
+      <!-- Footer Grid -->
+      <section class="footer-grid">
+        <div class="panel-tactical">
+          <div class="panel-header">
+            <span class="panel-icon">◎</span>
+            <span>DATA SOURCES</span>
+          </div>
+          <ul id="source-links" class="tactical-list"></ul>
+        </div>
+        <div class="panel-tactical">
+          <div class="panel-header">
+            <span class="panel-icon">⊗</span>
+            <span>ERRORS</span>
+          </div>
+          <ul id="errors" class="tactical-list"></ul>
+        </div>
+      </section>
+    </main>
+
+    <script src="/main.js" type="module"></script>
+  </body>
+</html>

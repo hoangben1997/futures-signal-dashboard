@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --check /Users/hoangnguyen/workspace/futures-signal-dashboard/server.js)",
+      "Bash(node --check /Users/hoangnguyen/workspace/futures-signal-dashboard/lib/scoring.js)",
+      "Bash(node --version)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FUTURES MONITOR - Decision First</title>
+    <link rel="stylesheet" href="/styles-new.css" />
+  </head>
+  <body class="dashboard-layout">
+    <!-- Decision Bar (Sticky) -->
+    <header class="decision-bar" role="banner">
+      <div class="decision-bar__primary">
+        <span id="outlook-badge" class="outlook-badge">LOADING</span>
+        <div class="confidence-meter">
+          <span class="confidence-meter__label">Confidence</span>
+          <span id="confidence-value" class="confidence-meter__value">--%</span>
+        </div>
+        <div class="key-metric">
+          <span class="key-metric__label">Score</span>
+          <span id="score-value" class="key-metric__value">--</span>
+        </div>
+        <div class="key-metric">
+          <span class="key-metric__label">Signals</span>
+          <span id="signals-count" class="key-metric__value">--</span>
+        </div>
+      </div>
+      <div class="decision-bar__meta">
+        <span id="last-updated" class="timestamp">LOADING...</span>
+      </div>
+      <div class="decision-bar__actions">
+        <select id="symbol-select" class="select-minimal">
+          <option value="BTCUSDT">BTC</option>
+          <option value="ETHUSDT">ETH</option>
+          <option value="SOLUSDT">SOL</option>
+        </select>
+      </div>
+    </header>
+
+    <!-- Sidebar (Collapsible) -->
+    <aside class="sidebar" role="complementary">
+      <nav class="sidebar__section">
+        <div class="sidebar__header">CANDLES</div>
+        <div class="candle-selector" id="candle-limit">
+          <button type="button" data-limit="24" class="candle-btn active">24</button>
+          <button type="button" data-limit="48" class="candle-btn">48</button>
+          <button type="button" data-limit="96" class="candle-btn">96</button>
+        </div>
+      </nav>
+      <nav class="sidebar__section">
+        <div class="sidebar__header">LAYERS</div>
+        <div class="layer-list">
+          <div class="layer-item active">
+            <span class="layer-icon">●</span>
+            <span>Price</span>
+          </div>
+          <div class="layer-item active">
+            <span class="layer-icon">▲</span>
+            <span>Derivatives</span>
+          </div>
+          <div class="layer-item active">
+            <span class="layer-icon">■</span>
+            <span>Sentiment</span>
+          </div>
+          <div class="layer-item active">
+            <span class="layer-icon">◆</span>
+            <span>Orderflow</span>
+          </div>
+        </div>
+      </nav>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content" role="main">
+      <!-- Primary Decision Grid -->
+      <div class="grid-decision">
+        <!-- Scenarios Panel -->
+        <section class="panel panel--scenarios" aria-labelledby="scenarios-heading">
+          <h2 id="scenarios-heading" class="panel__heading">
+            <span class="panel__icon">📊</span>
+            Scenario Probabilities
+          </h2>
+          <div id="scenario-list" class="scenario-list">
+            <!-- JS renders here -->
+          </div>
+          <div class="playbook">
+            <h3 class="playbook__heading">Playbook</h3>
+            <p id="playbook-text" class="playbook__text">Loading...</p>
+          </div>
+        </section>
+
+        <!-- Confirmation Matrix -->
+        <section class="panel panel--confirmation" aria-labelledby="confirmation-heading">
+          <h2 id="confirmation-heading" class="panel__heading">
+            <span class="panel__icon">✓</span>
+            Confirmation Matrix
+          </h2>
+          <div id="close-guides-grid" class="close-guides-grid">
+            <!-- JS renders here -->
+          </div>
+          <div class="chart-wrapper">
+            <div class="chart-controls">
+              <div class="segmented-control" id="chart-tf">
+                <button type="button" data-tf="1h" class="active">1H</button>
+                <button type="button" data-tf="4h">4H</button>
+              </div>
+            </div>
+            <div class="chart-container">
+              <svg id="price-chart" viewBox="0 0 480 240" preserveAspectRatio="none"></svg>
+            </div>
+            <div id="chart-note" class="chart-note"></div>
+          </div>
+        </section>
+      </div>
+
+      <!-- USDC Flow Panel -->
+      <section class="panel panel--usdc" aria-labelledby="usdc-heading">
+        <header class="panel__header">
+          <div class="panel__header-left">
+            <h2 id="usdc-heading" class="panel__heading">
+              <span class="panel__icon">💵</span>
+              USDC Treasury (72H)
+            </h2>
+            <div id="usdc-meta" class="panel__meta">-- events</div>
+          </div>
+          <div class="panel__filters">
+            <button class="filter-btn filter-btn--active" data-filter="all">All</button>
+            <button class="filter-btn" data-filter="MINT">Mint</button>
+            <button class="filter-btn" data-filter="BURN">Burn</button>
+          </div>
+        </header>
+        <div id="usdc-feed" class="event-feed" role="feed" aria-live="polite">
+          <!-- JS renders here -->
+        </div>
+      </section>
+
+      <!-- Metrics Cards -->
+      <section class="panel panel--metrics" aria-labelledby="metrics-heading">
+        <h2 id="metrics-heading" class="panel__heading">
+          <span class="panel__icon">📈</span>
+          Key Metrics
+        </h2>
+        <div id="metrics-grid" class="metrics-grid">
+          <!-- JS renders here -->
+        </div>
+      </section>
+
+      <!-- Expandable Sections -->
+      <div class="accordion">
+        <details class="accordion__item" open>
+          <summary class="accordion__trigger">
+            <span class="accordion__title">Signal Breakdown</span>
+            <span id="signals-count-detail" class="accordion__count">-- active</span>
+          </summary>
+          <div class="accordion__content">
+            <div id="signal-breakdown" class="signal-grid">
+              <!-- JS renders here -->
+            </div>
+          </div>
+        </details>
+
+        <details class="accordion__item">
+          <summary class="accordion__trigger">
+            <span class="accordion__title">Primary Signals</span>
+            <span id="reasons-count" class="accordion__count">--</span>
+          </summary>
+          <div class="accordion__content">
+            <ul id="reasons-list" class="info-list"></ul>
+          </div>
+        </details>
+
+        <details class="accordion__item">
+          <summary class="accordion__trigger">
+            <span class="accordion__title">Risk Notes</span>
+            <span id="risks-count" class="accordion__count">--</span>
+          </summary>
+          <div class="accordion__content">
+            <ul id="risks-list" class="info-list"></ul>
+          </div>
+        </details>
+
+        <details class="accordion__item">
+          <summary class="accordion__trigger">
+            <span class="accordion__title">Data Sources</span>
+            <span class="accordion__count">7 links</span>
+          </summary>
+          <div class="accordion__content">
+            <ul id="sources-list" class="info-list"></ul>
+          </div>
+        </details>
+
+        <details class="accordion__item">
+          <summary class="accordion__trigger">
+            <span class="accordion__title">Errors</span>
+            <span id="errors-count" class="accordion__count">--</span>
+          </summary>
+          <div class="accordion__content">
+            <ul id="errors-list" class="info-list"></ul>
+          </div>
+        </details>
+      </div>
+    </main>
+
+    <script src="/main-new.js" type="module"></script>
+  </body>
+</html>
