@@ -3,7 +3,8 @@
     "allow": [
       "Bash(node --check /Users/hoangnguyen/workspace/futures-signal-dashboard/server.js)",
       "Bash(node --check /Users/hoangnguyen/workspace/futures-signal-dashboard/lib/scoring.js)",
-      "Bash(node --version)"
+      "Bash(node --version)",
+      "Bash(node --check /Users/hoangnguyen/workspace/futures-signal-dashboard/public/main-new.js)"
     ],
     "deny": [],
     "ask": []

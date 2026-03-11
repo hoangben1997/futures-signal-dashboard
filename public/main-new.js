@@ -5,10 +5,13 @@ const scoreValueEl = document.getElementById('score-value');
 const signalsCountEl = document.getElementById('signals-count');
 const lastUpdatedEl = document.getElementById('last-updated');
 const symbolSelectEl = document.getElementById('symbol-select');
-const candleLimitEl = document.getElementById('candle-limit');
+const timeframeSelectorEl = document.getElementById('timeframe-selector');
 
 const scenarioListEl = document.getElementById('scenario-list');
+const mappedTrendEl = document.getElementById('mapped-trend');
+const backtestTableEl = document.getElementById('backtest-table');
 const playbookTextEl = document.getElementById('playbook-text');
+const playbookBasisEl = document.getElementById('playbook-basis');
 const closeGuidesGridEl = document.getElementById('close-guides-grid');
 const chartEl = document.getElementById('price-chart');
 const chartNoteEl = document.getElementById('chart-note');
@@ -17,6 +20,7 @@ const chartTfEl = document.getElementById('chart-tf');
 const usdcMetaEl = document.getElementById('usdc-meta');
 const usdcFeedEl = document.getElementById('usdc-feed');
 const metricsGridEl = document.getElementById('metrics-grid');
+const calendarTableEl = document.getElementById('calendar-table');
 
 const signalBreakdownEl = document.getElementById('signal-breakdown');
 const signalsCountDetailEl = document.getElementById('signals-count-detail');
@@ -31,8 +35,8 @@ const errorsListEl = document.getElementById('errors-list');
 let pollTimer = null;
 let selectedTf = '1h';
 let selectedSymbol = 'BTCUSDT';
-let selectedLimit = 24;
-let selectedUsdcFilter = 'all';
+let selectedTimeframeHours = 4;
+let selectedUsdcFilter = 'MINT';
 let latestSnapshot = null;
 let eventSource = null;
 
@@ -71,27 +75,36 @@ function timeAgoVi(input) {
 
 // Render Decision Bar
 function renderDecisionBar(snapshot) {
-  const { trend, metrics } = snapshot;
+  const { trend } = snapshot;
 
   // Outlook Badge
-  outlookBadgeEl.textContent = trend.outlook.toUpperCase();
-  if (trend.outlook.includes('Bullish')) {
+  const scoreForOutlook = Number(trend.decision?.score);
+  if (Number.isFinite(scoreForOutlook) && scoreForOutlook >= 0.25) {
+    outlookBadgeEl.textContent = 'BULLISH';
     outlookBadgeEl.setAttribute('data-outlook', 'BULLISH BIAS');
-  } else if (trend.outlook.includes('Bearish')) {
+  } else if (Number.isFinite(scoreForOutlook) && scoreForOutlook <= -0.25) {
+    outlookBadgeEl.textContent = 'BEARISH';
     outlookBadgeEl.setAttribute('data-outlook', 'BEARISH BIAS');
   } else {
+    outlookBadgeEl.textContent = 'SIDEWAYS';
     outlookBadgeEl.setAttribute('data-outlook', 'SIDEWAYS');
   }
 
   // Confidence
-  confidenceValueEl.textContent = `${trend.confidence}%`;
+  const confidence = Number(trend.confidence);
+  confidenceValueEl.textContent = Number.isFinite(confidence)
+    ? `${confidence.toFixed(1)}%`
+    : '--%';
 
   // Score
-  scoreValueEl.textContent = trend.score;
+  const score = Number(trend.score);
+  scoreValueEl.textContent = Number.isFinite(score) ? score.toFixed(2) : '--';
 
   // Signals Count
-  const activeSignals = (trend.rules || []).filter((r) => r.pass).length;
-  signalsCountEl.textContent = activeSignals;
+  const activeRuleSignals = (trend.rules || []).filter((r) => r.pass).length;
+  const mappedSignals = Object.values(trend.mappedTrend?.components || {})
+    .filter((v) => Number.isFinite(v) && Math.abs(v) >= 0.35).length;
+  signalsCountEl.textContent = activeRuleSignals + mappedSignals;
 
   // Last Updated
   const time = new Date(snapshot.generatedAt);
@@ -99,19 +112,72 @@ function renderDecisionBar(snapshot) {
 }
 
 // Render Scenario Probabilities
-function renderScenarios(scenarios) {
+function renderScenarios(scenarios, breakoutLevels, scenarioMeta) {
   scenarioListEl.innerHTML = '';
   if (!Array.isArray(scenarios) || !scenarios.length) {
     scenarioListEl.innerHTML = '<p style="color: var(--color-text-tertiary);">No scenario data</p>';
     return;
   }
 
+  // Render breakout levels first if available
+  if (breakoutLevels && breakoutLevels.currentPrice) {
+    const levelsBox = document.createElement('div');
+    levelsBox.className = 'breakout-levels';
+    levelsBox.innerHTML = `
+      <div class="breakout-levels__header">Ngưỡng xác nhận ${breakoutLevels.timeframeLabel} tiếp theo</div>
+      <div class="breakout-levels__grid">
+        <div class="breakout-level bullish">
+          <div class="breakout-level__label">Đóng trên</div>
+          <div class="breakout-level__price">$${nf.format(breakoutLevels.bullishAbove)}</div>
+          <div class="breakout-level__note">→ Xu hướng tăng</div>
+        </div>
+        <div class="breakout-level bearish">
+          <div class="breakout-level__label">Đóng dưới</div>
+          <div class="breakout-level__price">$${nf.format(breakoutLevels.bearishBelow)}</div>
+          <div class="breakout-level__note">→ Xu hướng giảm</div>
+        </div>
+      </div>
+      <div class="breakout-levels__footer">
+        Nến đóng: $${nf.format(breakoutLevels.basePrice)} | Giá hiện tại: $${nf.format(breakoutLevels.currentPrice)} | Ngưỡng: ±${breakoutLevels.thresholdPct}%
+      </div>
+    `;
+    scenarioListEl.appendChild(levelsBox);
+  }
+
+  // Render probability bars
+  const probabilityHeader = document.createElement('div');
+  probabilityHeader.className = 'scenario-probability-header';
+  let headerText = 'Xác suất kịch bản';
+  if (scenarioMeta?.source === 'historical+heuristic') {
+    const n = Number(scenarioMeta.sampleSize || 0);
+    const mode = scenarioMeta.mode === 'conditional' ? 'có điều kiện' : 'không điều kiện';
+    const w = Number(scenarioMeta.historicalWeight || 0);
+    const f = Number(scenarioMeta.formulaScore || 0);
+    headerText += ` (Thống kê 1 năm: n=${n}, ${mode}, w=${w}, f=${f.toFixed(3)})`;
+  }
+  probabilityHeader.textContent = headerText;
+  scenarioListEl.appendChild(probabilityHeader);
+
+  if (scenarioMeta?.drivers) {
+    const metaBox = document.createElement('div');
+    metaBox.className = 'scenario-meta';
+    const driverOrder = ['trend', 'momentum', 'position', 'volatility'];
+    const labels = { trend: 'Trend', momentum: 'Momentum', position: 'Position', volatility: 'Volatility' };
+    const chips = driverOrder.map((k) => {
+      const d = scenarioMeta.drivers[k];
+      if (!d) return null;
+      const edge = Number(d.edge || 0);
+      const tone = edge > 0.01 ? 'bullish' : edge < -0.01 ? 'bearish' : 'neutral';
+      return `<span class="scenario-meta__chip scenario-meta__chip--${tone}">${labels[k]}:${d.state} (${signed(edge, 3)})</span>`;
+    }).filter(Boolean).join('');
+    metaBox.innerHTML = chips;
+    scenarioListEl.appendChild(metaBox);
+  }
+
   const severityMap = {
-    'Strong Bull Run': 'low',
-    'Moderate Rally': 'low',
-    'Sideways Ranging': 'info',
-    'Moderate Correction': 'high',
-    'Sharp Selloff': 'critical'
+    'Tăng': 'low',
+    'Giảm': 'high',
+    'Sideway': 'info'
   };
 
   for (const s of scenarios) {
@@ -148,8 +214,171 @@ function renderScenarios(scenarios) {
 }
 
 // Render Playbook
-function renderPlaybook(playbook) {
+function renderPlaybook(playbook, basis) {
   playbookTextEl.textContent = playbook || 'No playbook available.';
+  if (!playbookBasisEl) return;
+  playbookBasisEl.innerHTML = '';
+
+  if (!basis) return;
+
+  const labels = {
+    structure: 'Cấu trúc',
+    derivatives: 'Phái sinh',
+    regime: 'Bối cảnh thị trường',
+    macroTime: 'Vĩ mô/Thời điểm'
+  };
+
+  const lines = [];
+  if (Array.isArray(basis.factors) && basis.factors.length) {
+    const top = basis.factors.slice(0, 3).map((f) =>
+      `${labels[f.key] || f.key}: ${signed(f.component)} × ${f.weight.toFixed(2)} = ${signed(f.contribution, 3)}`
+    );
+    lines.push(`Yếu tố chính: ${top.join(' | ')}`);
+  }
+
+  if (basis.scenario?.source === 'historical+heuristic') {
+    lines.push(
+      `Xác suất: thống kê 1 năm (${basis.scenario.mode === 'conditional' ? 'có điều kiện' : 'không điều kiện'}, n=${basis.scenario.sampleSize}, trọng số=${basis.scenario.historicalWeight})`
+    );
+  } else if (basis.scenario?.source) {
+    lines.push(`Xác suất: ${basis.scenario.source}`);
+  }
+
+  if (basis.confirmation) {
+    lines.push(
+      `Ngưỡng xác nhận ${String(basis.confirmation.timeframe || '').toUpperCase()}: đóng trên ${money(basis.confirmation.bullishAbove)}, đóng dưới ${money(basis.confirmation.bearishBelow)}, ngưỡng ±${basis.confirmation.thresholdPct}%`
+    );
+  }
+
+  if (Array.isArray(basis.activeRules) && basis.activeRules.length) {
+    const ruleText = basis.activeRules
+      .slice(0, 3)
+      .map((r) => `${r.name} (${signed(Number(r.score || 0), 0)})`)
+      .join(' | ');
+    lines.push(`Quy tắc đang tác động: ${ruleText}`);
+  }
+
+  if (basis.decision) {
+    lines.push(
+      `Điểm quyết định: ${signed(Number(basis.decision.score || 0), 3)} | Chênh xác suất (Tăng-Giảm): ${signed(Number(basis.decision.probEdge || 0), 3)} | Tín hiệu xác nhận: ${signed(Number(basis.decision.confirmSignal || 0), 3)} | Hệ số chất lượng: ${Number(basis.decision.qualityAdj || 0).toFixed(3)} | Ngưỡng nhẹ/mạnh: ${Number(basis.decision.thresholds?.weak || 0).toFixed(3)}/${Number(basis.decision.thresholds?.strong || 0).toFixed(3)}`
+    );
+  }
+
+  for (const line of lines) {
+    const item = document.createElement('div');
+    item.className = 'playbook-basis__item';
+    item.textContent = line;
+    playbookBasisEl.appendChild(item);
+  }
+}
+
+// Render mapped trend components
+function renderMappedTrend(mappedTrend, baseRuleScore) {
+  if (!mappedTrendEl) return;
+  mappedTrendEl.innerHTML = '';
+  if (!mappedTrend || !mappedTrend.components) {
+    mappedTrendEl.innerHTML = '<p style="color: var(--color-text-tertiary);">No trend mapping</p>';
+    return;
+  }
+
+  const mapScore = Number(mappedTrend.score || 0);
+  const tone = mapScore > 0.35 ? 'bullish' : mapScore < -0.35 ? 'bearish' : 'neutral';
+  const title = document.createElement('div');
+  title.className = 'mapped-trend__title';
+  title.textContent = `Trend Mapping (${String(mappedTrend.timeframe || '').toUpperCase()})`;
+
+  const head = document.createElement('div');
+  head.className = 'mapped-trend__head';
+  head.innerHTML = `
+    <span class="mapped-trend__chip mapped-trend__chip--${tone}">Mapped ${signed(mapScore)}</span>
+    <span class="mapped-trend__chip">Rule ${signed(baseRuleScore || 0)}</span>
+  `;
+
+  const list = document.createElement('div');
+  list.className = 'mapped-trend__list';
+  const labels = {
+    structure: 'Structure',
+    derivatives: 'Derivatives',
+    regime: 'Market Regime',
+    macroTime: 'Macro/Time'
+  };
+
+  const components = ['structure', 'derivatives', 'regime', 'macroTime']
+    .map((key) => {
+      const value = Number(mappedTrend.components[key] || 0);
+      const weight = Number(mappedTrend.weights?.[key] || 0);
+      return { key, value, weight, contribution: value * weight };
+    })
+    .sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution));
+
+  for (const c of components) {
+    const { key, value, weight, contribution } = c;
+    const pctWidth = Math.min(50, Math.abs(contribution) * 16);
+    const directionClass = contribution > 0 ? 'pos' : contribution < 0 ? 'neg' : 'flat';
+    const item = document.createElement('div');
+    item.className = 'mapped-trend__item';
+    item.innerHTML = `
+      <div class="mapped-trend__label">${labels[key] || key}</div>
+      <div class="mapped-trend__meta">${signed(value)} × ${weight.toFixed(2)} = ${signed(contribution, 3)}</div>
+      <div class="mapped-trend__bar">
+        <span class="mapped-trend__bar-axis"></span>
+        <span class="mapped-trend__bar-fill mapped-trend__bar-fill--${directionClass}" style="width:${pctWidth}%;"></span>
+      </div>
+    `;
+    list.appendChild(item);
+  }
+
+  mappedTrendEl.appendChild(title);
+  mappedTrendEl.appendChild(head);
+  mappedTrendEl.appendChild(list);
+}
+
+function renderBacktestTable(model) {
+  if (!backtestTableEl) return;
+  backtestTableEl.innerHTML = '';
+  const byTf = model?.byTimeframe || {};
+  const rows = ['4h', '8h', '12h', '1d', '3d', '1w']
+    .map((tf) => ({ tf, bt: byTf[tf]?.backtest || null }))
+    .filter((x) => x.bt && Number.isFinite(x.bt.testSamples));
+
+  if (!rows.length) {
+    backtestTableEl.innerHTML = '<p style="color: var(--color-text-tertiary);">No backtest stats</p>';
+    return;
+  }
+
+  const box = document.createElement('div');
+  box.className = 'backtest-box';
+  const title = document.createElement('div');
+  title.className = 'backtest-box__title';
+  title.textContent = 'Kiểm định (1 năm, chia theo thời gian)';
+  box.appendChild(title);
+
+  const table = document.createElement('table');
+  table.className = 'backtest-box__table';
+  table.innerHTML = `
+    <thead>
+      <tr>
+        <th>TF</th>
+        <th>Mẫu test</th>
+        <th>Độ đúng%</th>
+        <th>Độ đúng hướng%</th>
+        <th>Brier</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rows.map((r) => `
+        <tr>
+          <td>${String(r.tf).toUpperCase()}</td>
+          <td>${r.bt.testSamples}</td>
+          <td>${Number(r.bt.top1AccuracyPct || 0).toFixed(1)}</td>
+          <td>${Number(r.bt.directionalAccuracyPct || 0).toFixed(1)}</td>
+          <td>${Number(r.bt.brierScore || 0).toFixed(4)}</td>
+        </tr>
+      `).join('')}
+    </tbody>
+  `;
+  box.appendChild(table);
+  backtestTableEl.appendChild(box);
 }
 
 // Render Close Guides Grid
@@ -192,7 +421,7 @@ function drawCandleChart(candles) {
   }
 
   const width = 480;
-  const height = 240;
+  const height = 180;
   const pad = 10;
 
   const lows = candles.map((c) => c.low).filter((n) => Number.isFinite(n));
@@ -244,6 +473,7 @@ function drawCandleChart(candles) {
 }
 
 function renderChart(snapshot) {
+  // Chart luôn hiển thị 3 ngày, không phụ thuộc timeframe selector
   const tfMap = {
     '1h': snapshot.history?.candles1h || [],
     '4h': snapshot.history?.candles4h || []
@@ -312,6 +542,9 @@ function renderUSDCFeed(events) {
 
     usdcFeedEl.appendChild(item);
   }
+
+  // Auto scroll to top to show newest events
+  usdcFeedEl.scrollTop = 0;
 }
 
 // Render Metrics Grid
@@ -339,6 +572,53 @@ function renderMetrics(metrics) {
       <div class="metric-card__value">${card.value}</div>
     </div>
   `).join('');
+}
+
+// Render Economic Calendar
+function renderCalendar(events) {
+  calendarTableEl.innerHTML = '';
+  if (!events || !events.length) {
+    calendarTableEl.innerHTML = '<p style="color: var(--color-text-tertiary);">No economic events found</p>';
+    return;
+  }
+
+  const table = document.createElement('table');
+
+  // Header
+  const thead = document.createElement('thead');
+  thead.innerHTML = `
+    <tr>
+      <th>Date</th>
+      <th>Time</th>
+      <th>Currency</th>
+      <th>Event</th>
+      <th>Impact</th>
+      <th>Actual</th>
+      <th>Forecast</th>
+      <th>Previous</th>
+    </tr>
+  `;
+  table.appendChild(thead);
+
+  // Body
+  const tbody = document.createElement('tbody');
+  for (const event of events) {
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td class="calendar-table__date">${event.date || '-'}</td>
+      <td class="calendar-table__time">${event.time || '-'}</td>
+      <td><span class="calendar-table__currency">${event.currency || '-'}</span></td>
+      <td class="calendar-table__title">${event.title || '-'}</td>
+      <td class="calendar-table__impact">${event.impact || '-'}</td>
+      <td class="calendar-table__value calendar-table__value--actual">${event.actual || '-'}</td>
+      <td class="calendar-table__value">${event.forecast || '-'}</td>
+      <td class="calendar-table__value">${event.previous || '-'}</td>
+    `;
+    tbody.appendChild(row);
+  }
+  table.appendChild(tbody);
+
+  calendarTableEl.appendChild(table);
 }
 
 // Render Signal Breakdown
@@ -414,12 +694,18 @@ function render(snapshot) {
     latestSnapshot = snapshot;
 
     renderDecisionBar(snapshot);
-    renderScenarios(snapshot.trend.scenarioProbabilities || []);
-    renderPlaybook(snapshot.trend.playbook);
-    renderCloseGuides(snapshot.trend.closeGuides || []);
+    renderScenarios(
+      snapshot.trend.scenarioProbabilities || [],
+      snapshot.trend.breakoutLevels,
+      snapshot.trend.scenarioMeta
+    );
+    renderMappedTrend(snapshot.trend.mappedTrend, snapshot.trend.baseRuleScore);
+    renderBacktestTable(snapshot.metrics?.historicalScenarioModel);
+    renderPlaybook(snapshot.trend.playbook, snapshot.trend.playbookBasis);
     renderChart(snapshot);
     renderUSDCFeed(snapshot.usdcMinting || []);
     renderMetrics(snapshot.metrics);
+    renderCalendar(snapshot.economicCalendar || []);
     renderSignalBreakdown(snapshot.trend.rules || []);
 
     renderInfoList(reasonsListEl, reasonsCountEl, snapshot.trend.reasons, 'No strong signals detected.');
@@ -470,17 +756,12 @@ function bindSymbolSelect() {
   });
 }
 
-function bindCandleLimitButtons() {
-  if (!candleLimitEl) return;
-  candleLimitEl.addEventListener('click', (event) => {
-    const btn = event.target.closest('button[data-limit]');
-    if (!btn) return;
-    const limit = parseInt(btn.dataset.limit, 10);
-    if (!limit || limit === selectedLimit) return;
-    selectedLimit = limit;
-    for (const el of candleLimitEl.querySelectorAll('button')) {
-      el.classList.toggle('active', parseInt(el.dataset.limit, 10) === selectedLimit);
-    }
+function bindTimeframeButtons() {
+  if (!timeframeSelectorEl) return;
+  timeframeSelectorEl.addEventListener('change', () => {
+    const hours = parseInt(timeframeSelectorEl.value, 10);
+    if (!hours || hours === selectedTimeframeHours) return;
+    selectedTimeframeHours = hours;
     reconnect();
   });
 }
@@ -516,7 +797,7 @@ function reconnect() {
 
 async function load() {
   try {
-    const url = `/api/snapshot?symbol=${selectedSymbol}&limit=${selectedLimit}`;
+    const url = `/api/snapshot?symbol=${selectedSymbol}&timeframe=${selectedTimeframeHours}`;
     const res = await fetch(url);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Fetch failed');
@@ -527,7 +808,7 @@ async function load() {
 }
 
 function connectRealtime() {
-  const url = `/api/stream?symbol=${selectedSymbol}&limit=${selectedLimit}`;
+  const url = `/api/stream?symbol=${selectedSymbol}&timeframe=${selectedTimeframeHours}`;
   eventSource = new EventSource(url);
   lastUpdatedEl.textContent = 'CONNECTING...';
 
@@ -550,6 +831,6 @@ function connectRealtime() {
 // Initialize
 bindChartTfButtons();
 bindSymbolSelect();
-bindCandleLimitButtons();
+bindTimeframeButtons();
 bindUSDCFilters();
 connectRealtime();

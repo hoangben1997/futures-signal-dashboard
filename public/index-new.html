@@ -39,12 +39,15 @@
     <!-- Sidebar (Collapsible) -->
     <aside class="sidebar" role="complementary">
       <nav class="sidebar__section">
-        <div class="sidebar__header">CANDLES</div>
-        <div class="candle-selector" id="candle-limit">
-          <button type="button" data-limit="24" class="candle-btn active">24</button>
-          <button type="button" data-limit="48" class="candle-btn">48</button>
-          <button type="button" data-limit="96" class="candle-btn">96</button>
-        </div>
+        <div class="sidebar__header">TIMEFRAME</div>
+        <select id="timeframe-selector" class="select-minimal">
+          <option value="4" selected>4h</option>
+          <option value="8">8h</option>
+          <option value="12">12h</option>
+          <option value="24">1d</option>
+          <option value="72">3d</option>
+          <option value="168">1w</option>
+        </select>
       </nav>
       <nav class="sidebar__section">
         <div class="sidebar__header">LAYERS</div>
@@ -71,6 +74,17 @@
 
     <!-- Main Content -->
     <main class="main-content" role="main">
+      <!-- Metrics Cards -->
+      <section class="panel panel--metrics" aria-labelledby="metrics-heading">
+        <h2 id="metrics-heading" class="panel__heading">
+          <span class="panel__icon">📈</span>
+          Key Metrics
+        </h2>
+        <div id="metrics-grid" class="metrics-grid">
+          <!-- JS renders here -->
+        </div>
+      </section>
+
       <!-- Primary Decision Grid -->
       <div class="grid-decision">
         <!-- Scenarios Panel -->
@@ -82,64 +96,68 @@
           <div id="scenario-list" class="scenario-list">
             <!-- JS renders here -->
           </div>
+          <div id="mapped-trend" class="mapped-trend">
+            <!-- JS renders here -->
+          </div>
+          <div id="backtest-table" class="backtest-table">
+            <!-- JS renders here -->
+          </div>
           <div class="playbook">
             <h3 class="playbook__heading">Playbook</h3>
             <p id="playbook-text" class="playbook__text">Loading...</p>
+            <div id="playbook-basis" class="playbook-basis"></div>
           </div>
         </section>
 
-        <!-- Confirmation Matrix -->
-        <section class="panel panel--confirmation" aria-labelledby="confirmation-heading">
-          <h2 id="confirmation-heading" class="panel__heading">
-            <span class="panel__icon">✓</span>
-            Confirmation Matrix
-          </h2>
-          <div id="close-guides-grid" class="close-guides-grid">
+        <!-- USDC Flow Panel -->
+        <section class="panel panel--usdc" aria-labelledby="usdc-heading">
+          <header class="panel__header">
+            <div class="panel__header-left">
+              <h2 id="usdc-heading" class="panel__heading">
+                <span class="panel__icon">💵</span>
+                USDC Treasury (72H)
+              </h2>
+              <div id="usdc-meta" class="panel__meta">-- events</div>
+            </div>
+            <div class="panel__filters">
+              <button class="filter-btn" data-filter="all">All</button>
+              <button class="filter-btn filter-btn--active" data-filter="MINT">Mint</button>
+              <button class="filter-btn" data-filter="BURN">Burn</button>
+            </div>
+          </header>
+          <div id="usdc-feed" class="event-feed" role="feed" aria-live="polite">
             <!-- JS renders here -->
-          </div>
-          <div class="chart-wrapper">
-            <div class="chart-controls">
-              <div class="segmented-control" id="chart-tf">
-                <button type="button" data-tf="1h" class="active">1H</button>
-                <button type="button" data-tf="4h">4H</button>
-              </div>
-            </div>
-            <div class="chart-container">
-              <svg id="price-chart" viewBox="0 0 480 240" preserveAspectRatio="none"></svg>
-            </div>
-            <div id="chart-note" class="chart-note"></div>
           </div>
         </section>
       </div>
 
-      <!-- USDC Flow Panel -->
-      <section class="panel panel--usdc" aria-labelledby="usdc-heading">
-        <header class="panel__header">
-          <div class="panel__header-left">
-            <h2 id="usdc-heading" class="panel__heading">
-              <span class="panel__icon">💵</span>
-              USDC Treasury (72H)
-            </h2>
-            <div id="usdc-meta" class="panel__meta">-- events</div>
+      <!-- Confirmation Matrix -->
+      <section class="panel panel--confirmation" aria-labelledby="confirmation-heading" style="display: none;">
+        <h2 id="confirmation-heading" class="panel__heading">
+          <span class="panel__icon">✓</span>
+          Confirmation Matrix
+        </h2>
+        <div class="chart-wrapper">
+          <div class="chart-controls">
+            <div class="segmented-control" id="chart-tf">
+              <button type="button" data-tf="1h" class="active">1H</button>
+              <button type="button" data-tf="4h">4H</button>
+            </div>
           </div>
-          <div class="panel__filters">
-            <button class="filter-btn filter-btn--active" data-filter="all">All</button>
-            <button class="filter-btn" data-filter="MINT">Mint</button>
-            <button class="filter-btn" data-filter="BURN">Burn</button>
+          <div class="chart-container">
+            <svg id="price-chart" viewBox="0 0 480 180" preserveAspectRatio="none"></svg>
           </div>
-        </header>
-        <div id="usdc-feed" class="event-feed" role="feed" aria-live="polite">
-          <!-- JS renders here -->
+          <div id="chart-note" class="chart-note"></div>
         </div>
       </section>
 
-      <!-- Metrics Cards -->
-      <section class="panel panel--metrics" aria-labelledby="metrics-heading">
-        <h2 id="metrics-heading" class="panel__heading">
-          <span class="panel__icon">📈</span>
-          Key Metrics
+      <!-- Economic Calendar -->
+      <section class="panel panel--calendar" aria-labelledby="calendar-heading">
+        <h2 id="calendar-heading" class="panel__heading">
+          <span class="panel__icon">📅</span>
+          Economic Calendar (High Impact)
         </h2>
-        <div id="metrics-grid" class="metrics-grid">
+        <div id="calendar-table" class="calendar-table">
           <!-- JS renders here -->
         </div>
       </section>
