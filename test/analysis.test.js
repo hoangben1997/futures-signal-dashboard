@@ -202,3 +202,17 @@ test('độ phủ: phần lớn nguồn thiếu → chưa đủ dữ liệu dù 
   assert.equal(r.summary.freshDataPct, 33);
   assert.equal(r.summary.bias, 'insufficient');
 });
+
+test('audit 2026-11-25: Fear & Greed và volume chỉ còn thông tin, không có hướng', () => {
+  const tech = bearishTechnicals().byTf;
+  tech['1d'] = { ...tech['1d'], lastClosedVolRatio: 2.5, lastClosedCandle: { ...tech['1d'].lastClosedCandle, changePct: -4, shape: 'strong_bear' } };
+  for (const fearGreed of [5, 50, 95]) {
+    const r = buildMarketReport({ symbol: 'BTCUSDT', metrics: { price: 100, fearGreed }, technicals: { byTf: tech } });
+    const sentiment = r.factorTable.find((f) => f.group === 'sentiment');
+    const volume = r.factorTable.find((f) => f.group === 'volume');
+    assert.ok(sentiment.evidence.length === 1 && sentiment.evidence[0].direction === 0);
+    assert.ok(volume.evidence.every((e) => e.direction === 0));
+    assert.equal(r.families.find((f) => f.family === 'sentiment').direction, 'neutral');
+    assert.equal(r.families.find((f) => f.family === 'volume').direction, 'neutral');
+  }
+});

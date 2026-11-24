@@ -55,6 +55,18 @@ Spec đăng ký trước: [AUDIT_SPEC](AUDIT_SPEC.md) (commit `f4fac92`). Code: 
 
 Bỏ hai nhóm này là quyết định **sau khi đã xem kết quả** (không nằm trong quy tắc đăng ký trước). Nếu bỏ thì phải ghi rõ là post-hoc.
 
+## Quyết định sau audit (2026-11-25, **post-hoc**)
+
+Người dùng chọn bỏ cả hai nhóm "nghiêng sai". Sau khi chạy lại audit với code đã sửa (`data/reports/dashboard-audit-v1-after-removal.json`):
+
+| Thay đổi | Ảnh hưởng tới tín hiệu người dùng thấy | Quyết định |
+|---|---|---|
+| Bỏ F&G khỏi `scoring.js` (rule 6 + phần F&G của macroTime) | **Badge kém đi ở cả hai giai đoạn:** edge D +0,073 → +0,053, C +0,078 → +0,060. Đứng riêng thì F&G nghiêng sai, nhưng trong tổ hợp của badge nó lại có ích | **Hoàn tác**: `scoring.js` giữ nguyên như trước audit |
+| Bỏ hướng của nhóm sentiment (F&G) và volume trong DiSSS | Kết luận DiSSS 24h: D +0,060 → +0,060, C +0,001 → +0,010, toàn kỳ +0,037 → +0,040. 7 ngày: không đổi đáng kể | **Giữ**: hai nhóm chỉ còn hiển thị, không tính điểm |
+| Bỏ điều kiện F&G trong mục "định giá sai" của DiSSS | Chỉ là text, không có điểm | Giữ cho nhất quán (không dùng logic đọc ngược F&G) |
+
+Các con số trước/sau đều **in-sample** (cùng dữ liệu dùng để quyết định), nên lạc quan. Bằng chứng ngoài mẫu sẽ đến từ audit lần sau trên dữ liệu mới.
+
 ## Giới hạn
 
 - Audit dùng nến đã đóng, còn dashboard live dùng nến đang chạy cho `closeChange*` và momentum. Kết quả mô tả dashboard *nếu* chỉ dùng nến đóng.

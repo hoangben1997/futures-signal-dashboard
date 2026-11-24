@@ -2,7 +2,7 @@
 /**
  * Chạy dashboard audit (docs/AUDIT_SPEC.md) trên dữ liệu thật đã đóng băng.
  *
- *   node scripts/run-audit.js [--cutoff 2026-11-24]
+ *   node scripts/run-audit.js [--cutoff 2026-11-24] [--suffix -after-removal]
  *
  * Cần các dataset trong data/datasets/ (scripts/build-dataset.js cho 1h/4h/1d/1w/1M,
  * scripts/fetch-audit-inputs.js cho funding/FNG/metrics5m). Ghi report vào data/reports/.
@@ -31,6 +31,8 @@ const pct = (v) => (v === null || v === undefined ? '-' : `${(v * 100).toFixed(1
 async function main() {
   const i = process.argv.indexOf('--cutoff');
   const cutoff = i >= 0 ? process.argv[i + 1] : '2026-11-24';
+  const j = process.argv.indexOf('--suffix');
+  const suffix = j >= 0 ? process.argv[j + 1] : '';
   const inputs = {};
   const shas = {};
   for (const [key, name] of [['1h', 'BTCUSDT-1h'], ['4h', 'BTCUSDT-4h'], ['1d', 'BTCUSDT-1d'], ['1w', 'BTCUSDT-1w'], ['1M', 'BTCUSDT-1M'],
@@ -54,10 +56,10 @@ async function main() {
   const report = { version: AUDIT_SPEC.version, spec: AUDIT_SPEC, datasets: shas, origins: rows.length, inputCoverage: coverage, ...result };
   const json = `${JSON.stringify(report, null, 2)}\n`;
   await mkdir(join(ROOT, 'data', 'reports'), { recursive: true });
-  const out = join(ROOT, 'data', 'reports', `${AUDIT_SPEC.version}.json`);
+  const out = join(ROOT, 'data', 'reports', `${AUDIT_SPEC.version}${suffix}.json`);
   await writeFile(out, json);
-  await writeFile(join(ROOT, 'data', 'reports', `${AUDIT_SPEC.version}-rows.json`), JSON.stringify(rows));
-  await appendFile(join(ROOT, 'data', 'reports', 'experiments.jsonl'), `${JSON.stringify({ runAt: new Date().toISOString(), version: AUDIT_SPEC.version, reportSha256: sha256(json), origins: rows.length })}\n`);
+  await writeFile(join(ROOT, 'data', 'reports', `${AUDIT_SPEC.version}${suffix}-rows.json`), JSON.stringify(rows));
+  await appendFile(join(ROOT, 'data', 'reports', 'experiments.jsonl'), `${JSON.stringify({ runAt: new Date().toISOString(), version: `${AUDIT_SPEC.version}${suffix}`, reportSha256: sha256(json), origins: rows.length })}\n`);
 
   console.log(`${rows.length} origin (discovery ${result.periods.discovery}, confirmation ${result.periods.confirmation}) · ${((Date.now() - t0) / 1000).toFixed(1)} s`);
   console.log(`Độ phủ đầu vào: ${Object.entries(coverage).map(([k, v]) => `${k} ${pct(v)}`).join(' · ')}`);
