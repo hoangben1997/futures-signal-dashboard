@@ -4,6 +4,7 @@ import {
   aggregateFamilies,
   buildKeyLevels,
   buildMarketReport,
+  familyAvailability,
   pickConfirmLevel,
   roundStep,
   statisticalModelCheck,
@@ -164,4 +165,40 @@ test('upcomingHighImpactEvents: chỉ lấy sự kiện USD High trong 72h tới
   const out = upcomingHighImpactEvents(events, now);
   assert.deepEqual(out.map((e) => e.title), ['CPI']);
   assert.equal(out[0].hoursAway, 37.5);
+});
+
+test('độ phủ: feed USDC chạy thành công nhưng rỗng là có dữ liệu, không phải thiếu', () => {
+  const metrics = { price: 100, fundingRate: 0.0001, openInterestChange6h: 1, momentum6h: 0.1, longShortRatio: 1.2, takerBuySellRatio: 1, fearGreed: 50 };
+  const tech = bearishTechnicals().byTf;
+  const ok = familyAvailability({ tech, metrics, usdcEvents: [], sourceHealth: { onchain: { ok: true, stale: false } } });
+  assert.equal(ok.onchain, 'available');
+  const failed = familyAvailability({ tech, metrics, usdcEvents: [], sourceHealth: { onchain: { ok: false, stale: false } } });
+  assert.equal(failed.onchain, 'missing');
+
+  const r = buildMarketReport({ symbol: 'BTCUSDT', metrics, technicals: { byTf: tech }, usdcEvents: [], sourceHealth: { onchain: { ok: true, stale: false } } });
+  assert.equal(r.summary.dataAvailablePct, 100);
+  assert.equal(r.summary.freshDataPct, 100);
+  // Nguồn trung tính (funding 0,01%, F&G 50, USDC rỗng...) không làm giảm độ phủ dữ liệu
+  assert.ok(r.summary.activeEvidencePct < r.summary.dataAvailablePct);
+});
+
+test('độ phủ: nguồn báo stale không tính vào dữ liệu mới, và được nêu tên', () => {
+  const metrics = { price: 100, fearGreed: 50, fundingRate: 0.0001 };
+  const r = buildMarketReport({
+    symbol: 'BTCUSDT',
+    metrics,
+    technicals: bearishTechnicals(),
+    sourceHealth: { sentiment: { ok: true, stale: true } }
+  });
+  assert.equal(r.availability.sentiment, 'stale');
+  assert.equal(r.availability.funding, 'available');
+  assert.ok(r.summary.freshDataPct < r.summary.dataAvailablePct);
+  assert.ok(r.selfCritique.quant.some((t) => t.includes('dữ liệu cũ') && t.includes('Fear & Greed')));
+});
+
+test('độ phủ: phần lớn nguồn thiếu → chưa đủ dữ liệu dù có kỹ thuật', () => {
+  const r = buildMarketReport({ symbol: 'BTCUSDT', metrics: { price: 100 }, technicals: bearishTechnicals() });
+  // Chỉ có price-long, price-short, volume → 3/9 < 50%
+  assert.equal(r.summary.freshDataPct, 33);
+  assert.equal(r.summary.bias, 'insufficient');
 });

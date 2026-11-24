@@ -1036,6 +1036,17 @@ async function getSnapshot(symbol = 'BTCUSDT', timeframeHours = 4) {
     errors.push(`Technicals lỗi: ${err.message}`);
   }
 
+  // Tình trạng nguồn theo family của DiSSS: ok nếu ít nhất một nguồn chạy được, stale nếu có nguồn báo cũ.
+  const health = (...list) => ({ ok: list.some((x) => x?.ok), stale: list.some((x) => x?.stale) });
+  const sourceHealth = {
+    funding: health(src.premium),
+    oi: health(src.oiNow, src.oiHist),
+    positioning: health(src.lsHist, src.topTraderLs),
+    flow: health(src.takerFlow),
+    sentiment: health(globalSrc.fearGreed),
+    onchain: { ok: usdc.ok, stale: usdc.stale }
+  };
+
   let analysis = null;
   try {
     analysis = buildMarketReport({
@@ -1044,6 +1055,7 @@ async function getSnapshot(symbol = 'BTCUSDT', timeframeHours = 4) {
       technicals,
       calendar: calendarV || [],
       usdcEvents: usdcEventsV || [],
+      sourceHealth,
       errors
     });
   } catch (err) {

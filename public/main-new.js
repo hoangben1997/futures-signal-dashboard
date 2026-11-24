@@ -700,7 +700,7 @@ function renderAnalysis(analysis) {
       ${chip(`Regime: ${s.regimeLabel}`)}
       ${chip(`Điểm ròng ${signed(s.netScore)} / ±${s.maxScore}`, biasTone)}
       ${chip(`Tin cậy: ${CONFIDENCE_LABEL[s.confidence] || s.confidence}`)}
-      ${chip(`Độ phủ dữ liệu ${s.coveragePct}%`)}
+      ${chip(`Dữ liệu mới ${s.freshDataPct}% · có dữ liệu ${s.dataAvailablePct}% · nghiêng một phía ${s.activeEvidencePct}%`)}
       <p class="analysis__summary-text">${esc(s.text)}</p>
     </div>
 
