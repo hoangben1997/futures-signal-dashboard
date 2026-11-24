@@ -9,6 +9,8 @@ import { computeAbsMovePct, num, pctChange, std, summarizeMoves, toClosedKlines 
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PORT = Number(process.env.PORT || 7000);
+// Mặc định chỉ nhận kết nối từ máy này (dashboard không có xác thực). Đặt HOST=0.0.0.0 để mở ra mạng LAN.
+const HOST = process.env.HOST || '127.0.0.1';
 const REFRESH_MS = Number(process.env.REFRESH_MS || 5000);
 const USDC_REFRESH_MS = Number(process.env.USDC_REFRESH_MS || 3600000);
 const TECHNICALS_REFRESH_MS = Number(process.env.TECHNICALS_REFRESH_MS || 60 * 1000);
@@ -1214,12 +1216,13 @@ function resetCaches() {
   Object.assign(calendarCache, { events: [], ok: false, error: null, inflight: null, lastAttemptAt: 0, updatedAt: 0 });
 }
 
-function start(port = PORT) {
+function start(port = PORT, host = HOST) {
   const timer = setInterval(refreshAllClients, REFRESH_MS);
   server.once('close', () => clearInterval(timer));
   return new Promise((done) => {
-    server.listen(port, () => {
-      console.log(`Dashboard running at http://localhost:${server.address().port}`);
+    server.listen(port, host, () => {
+      const { address, port: boundPort } = server.address();
+      console.log(`Dashboard running at http://${address}:${boundPort}`);
       done(server);
     });
   });

@@ -75,6 +75,7 @@ Tất cả env variables được quản lý trong file `.env` (copy từ `.env.
 
 ### Core Settings
 - `PORT`: Server port (default: 7000)
+- `HOST`: Interface để listen (default: `127.0.0.1`, chỉ máy này truy cập được). Đặt `0.0.0.0` để mở cho mạng LAN; dashboard không có xác thực.
 - `REFRESH_MS`: Chu kỳ refresh dữ liệu backend (default: 5000ms)
 - `USDC_REFRESH_MS`: Chu kỳ refresh riêng cho dữ liệu `USDC TREASURY (72H)` (default: 60000ms)
 - `TECHNICALS_REFRESH_MS`: Chu kỳ lấy lại nến đa khung cho phần kỹ thuật + phân tích DiSSS (default: 60000ms)

@@ -107,7 +107,7 @@ Test `fail closed …` khẳng định thêm: chèn một hàng chưa kiểm đ�
 4. **Ingestion vẫn gắn với request/SSE:** không có client thì không fetch, các nhóm SSE vẫn xử lý tuần tự. Việc tách timer và watermark nến đóng thuộc P1 (shadow forward).
 5. USDC khi stale vẫn dùng sự kiện của cửa sổ 72h tại lần fetch thành công cuối. Ngưỡng hiển thị > 100M chỉ áp ở frontend, còn DiSSS dùng feed đầy đủ (INDEPENDENT_REVIEW §2, chưa nằm trong P0).
 6. DiSSS "độ phủ dữ liệu" đang lẫn "thiếu dữ liệu" với "dữ liệu trung tính" (INDEPENDENT_REVIEW §2). Chưa đổi tên, vì không nằm trong P0.
-7. Server `listen` trên mọi interface, không chỉ loopback (INDEPENDENT_REVIEW §2). Không có trong danh sách P0. Đề xuất một dòng: bind `127.0.0.1` mặc định, cho phép override bằng env (chờ duyệt).
+7. ~~Server `listen` trên mọi interface.~~ **Đã xử lý 2026-11-24:** mặc định bind `127.0.0.1`, đổi bằng env `HOST`. Test HTTP kiểm `server.address().address`.
 8. Ngưỡng stale theo nguồn (ví dụ F&G 48h, oiHist 2h) là lựa chọn vận hành, dễ đổi (`symbolSourceSpecs`/`GLOBAL_SOURCE_SPECS` trong `server.js`).
 9. Trong lúc kiểm thử, ForexFactory trả 429 do server bị khởi động lại nhiều lần. Lỗi này giờ hiện trong `errors`. Khi lịch đang rỗng, cache thử lại sau 2 phút như cũ.
 10. Smoke trình duyệt chạy bằng script tạm (Chrome + CDP), chưa nằm trong `npm test` (repo zero-dependency, không có browser runner).

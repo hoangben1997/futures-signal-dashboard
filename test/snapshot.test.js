@@ -172,10 +172,11 @@ test('fail closed: hàng lịch sử chưa kiểm định (≥140 mẫu, Brier �
 test('HTTP: SSE gửi snapshot theo đúng symbol/horizon khi đổi tham số; /api/snapshot cho polling', async () => {
   mock = installMockMarket();
   await start(0);
-  const { port } = server.address();
+  const { port, address } = server.address();
+  assert.equal(address, '127.0.0.1', 'mặc định chỉ bind loopback');
   const firstSnapshot = async (query) => {
     const ctrl = new AbortController();
-    const res = await fetch(`http://localhost:${port}/api/stream?${query}`, { signal: ctrl.signal });
+    const res = await fetch(`http://127.0.0.1:${port}/api/stream?${query}`, { signal: ctrl.signal });
     assert.equal(res.headers.get('content-type'), 'text/event-stream; charset=utf-8');
     const reader = res.body.getReader();
     const dec = new TextDecoder();
@@ -199,13 +200,13 @@ test('HTTP: SSE gửi snapshot theo đúng symbol/horizon khi đổi tham số; 
     assert.equal(b.metrics.symbol, 'ETHUSDT');
     assert.equal(b.trend.mappedTrend.timeframe, '3d');
 
-    const res = await fetch(`http://localhost:${port}/api/snapshot?symbol=SOLUSDT&timeframe=168`);
+    const res = await fetch(`http://127.0.0.1:${port}/api/snapshot?symbol=SOLUSDT&timeframe=168`);
     assert.equal(res.status, 200);
     const c = await res.json();
     assert.equal(c.metrics.symbol, 'SOLUSDT');
     assert.equal(c.contract.validatedProbabilities, false);
 
-    const bad = await fetch(`http://localhost:${port}/api/snapshot?symbol=DOGEUSDT`);
+    const bad = await fetch(`http://127.0.0.1:${port}/api/snapshot?symbol=DOGEUSDT`);
     assert.equal(bad.status, 500);
   } finally {
     server.closeAllConnections();
