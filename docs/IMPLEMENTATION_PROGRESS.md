@@ -8,7 +8,11 @@ Lộ trình đang theo: [REVISED_ROADMAP](REVISED_ROADMAP.md). Phạm vi đượ
 | P0-B. Cách ly historical model, fail closed cả hai đường | **Xong** | 2026-11-24 |
 | P0-C. Kiểm tra qua entry point (+ smoke trình duyệt) | **Xong** | 2026-11-24 |
 | P0-D. Vận hành: freshness, lỗi upstream, dedup fetch, render calendar | **Xong** | 2026-11-24 |
-| P1 trở đi | **Chưa bắt đầu**, chờ quyết định | — |
+| P1-1. Data contract (dataset-v1) | **Xong** | 2026-11-24 |
+| P1-2. Feature/nhãn point-in-time (features-v1, label-ksigma-v1) | **Xong** | 2026-11-24 |
+| P1-3. Replay rolling-origin + baseline | **Chưa bắt đầu** | — |
+| P1-4. Kiểm archive metrics Binance (OI/LS) | **Chưa bắt đầu** | — |
+| P1 shadow forward | **Chưa bắt đầu** | — |
 
 Lưu ý: working tree đã có thay đổi chưa commit từ trước phiên này (README, `server.js`, `public/*-new.*`, `lib/analysis.js`, `lib/indicators.js`, `test/`). `git diff` vì vậy gộp cả hai phần. Chưa commit theo quy ước repo.
 
@@ -111,6 +115,28 @@ Test `fail closed …` khẳng định thêm: chèn một hàng chưa kiểm đ�
 8. Ngưỡng stale theo nguồn (ví dụ F&G 48h, oiHist 2h) là lựa chọn vận hành, dễ đổi (`symbolSourceSpecs`/`GLOBAL_SOURCE_SPECS` trong `server.js`).
 9. Trong lúc kiểm thử, ForexFactory trả 429 do server bị khởi động lại nhiều lần. Lỗi này giờ hiện trong `errors`. Khi lịch đang rỗng, cache thử lại sau 2 phút như cũ.
 10. Smoke trình duyệt chạy bằng script tạm (Chrome + CDP), chưa nằm trong `npm test` (repo zero-dependency, không có browser runner).
+
+## P1 bước 1–2 (2026-11-24)
+
+**Quyết định đã chốt:** band k·σ; cho phép ghi `data/` (đã gitignore trước khi ghi); OI/LS kiểm archive trước, chưa mở collector. Spec đóng băng **trước khi xem kết quả**: [P1_SPEC](P1_SPEC.md).
+
+**Thay đổi:**
+- `lib/dataset.js` + `scripts/build-dataset.js`: tải klines futures theo trang, chỉ nến đóng trước cutoff. Có conflict thì dừng, không ghi. Gap được liệt kê, không xoá. Checksum SHA-256; chạy lại với checksum khác thì không ghi đè.
+- `lib/pit.js`: `featuresAt(bars, asOf)` (σ EWMA, `mom1z`, `trend50`) và `labelFor()`. Mọi độ trễ tính theo timestamp; thiếu target thì nhãn `null`.
+- `.gitignore`: thêm `data/`.
+
+**Nghiệm thu trên dữ liệu thật** (`BTCUSDT-1d-cutoff-2026-11-24`, sha256 `4d813d15…`):
+
+| Hạng mục | Kết quả |
+|---|---|
+| Nến | 2.634 (2019-09-08 → 2026-11-23); gap 0, duplicate 0, row lỗi 0 |
+| Tải lại cùng cutoff | Cùng checksum, CLI báo "Không đổi" |
+| Origin có feature hợp lệ | 2.574 (60 thiếu do warm-up σ) |
+| Origin có nhãn | 2.573 (thêm 1 thiếu target: nến cuối cùng) |
+| Truncation test ngẫu nhiên (20 mốc) | 0 lệch |
+| `npm test` | 50 pass / 0 fail |
+
+Chưa xem phân bố nhãn hay bất kỳ kết quả dự báo nào. Đó là bước 3 (replay), cần chốt thêm trước khi chạy: độ dài cửa sổ train, bước refit, kỳ xác nhận giữ lại, chênh loss tối thiểu và quy tắc CI.
 
 ## Quyết định cần chốt trước P1 (theo REVISED_ROADMAP)
 

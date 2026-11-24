@@ -192,6 +192,12 @@ futures-signal-dashboard/
 
 ## Testing
 
+### Dataset P1 (BTCUSDT 1d, đóng băng theo cutoff)
+```bash
+node scripts/build-dataset.js --symbol BTCUSDT --interval 1d --cutoff 2026-11-24
+```
+Ghi vào `data/datasets/` (đã gitignore), kèm manifest có checksum. Spec: `docs/P1_SPEC.md`.
+
 ### Unit test
 ```bash
 npm test   # node --test, zero dependency
