@@ -78,6 +78,8 @@ Tất cả env variables được quản lý trong file `.env` (copy từ `.env.
 - `HOST`: Interface để listen (default: `127.0.0.1`, chỉ máy này truy cập được). Đặt `0.0.0.0` để mở cho mạng LAN; dashboard không có xác thực.
 - `REFRESH_MS`: Chu kỳ refresh dữ liệu backend (default: 5000ms)
 - `USDC_REFRESH_MS`: Chu kỳ refresh riêng cho dữ liệu `USDC TREASURY (72H)` (default: 60000ms)
+- `SHADOW_ENABLED`: `0` để tắt shadow forward (mặc định bật khi chạy `node server.js`, ghi vào `data/shadow/`)
+- `SHADOW_INTERVAL_MS`: chu kỳ kiểm nến đóng của shadow (default: 300000ms)
 - `TECHNICALS_REFRESH_MS`: Chu kỳ lấy lại nến đa khung cho phần kỹ thuật + phân tích DiSSS (default: 60000ms)
 
 ### USDC On-chain Data (Optional)
@@ -203,6 +205,12 @@ Replay walk-forward (không chạm holdout):
 node scripts/run-replay.js --dataset data/datasets/BTCUSDT-1d-cutoff-2026-11-24.jsonl
 ```
 Report vào `data/reports/`, kết quả hiện tại ở `docs/IMPLEMENTATION_PROGRESS.md`.
+
+Shadow forward (ghi dự báo baseline mỗi ngày vào `data/shadow/`, không hiển thị lên UI): tự chạy khi `node server.js` (tắt bằng `SHADOW_ENABLED=0`).
+```bash
+node scripts/shadow.js status   # đã phát hành / trễ / bỏ lỡ / đã chấm
+node scripts/shadow.js run      # chạy một chu kỳ ngay
+```
 
 ### Unit test
 ```bash

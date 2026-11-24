@@ -99,9 +99,27 @@ Chốt với người dùng ngày 2026-11-24, trước lần chạy replay đầ
 
 **Tái lập:** report ghi sha256 dataset, version spec và seed. Chạy lại phải ra cùng số. Mọi lần chạy được ghi một dòng vào `data/reports/experiments.jsonl`.
 
+## 8. Shadow forward (`shadow-v1`)
+
+Duyệt ngày 2026-11-24. Chỉ ghi vào `data/shadow/`, **không hiển thị lên dashboard** (`published: false`).
+
+- **Phạm vi:** BTCUSDT, mỗi nến ngày đóng (origin), horizon 24h, nhãn `label-ksigma-v1`. Ghi xác suất M0, B2, G và M1. M1 là ứng viên đã trượt cổng ở replay-v1, chỉ để theo dõi.
+- **Parity:** dùng đúng `featuresAt` và `fitModelsAtCutoff` của replay. Có test khẳng định dự báo shadow cho một origin lịch sử bằng dự báo replay của origin đó.
+- **Thời gian:** mọi mốc so sánh dùng giờ sàn (`/fapi/v1/time`), lưu kèm độ lệch đồng hồ máy. Watermark là nến ngày đóng gần nhất mà sàn trả về.
+- **Hạn phát hành:** 1 giờ sau origin.
+  - Ghi trong hạn: dự báo đúng hạn, được chấm.
+  - Quá hạn nhưng chưa biết kết quả: vẫn ghi, kèm `late: true`, **không chấm**.
+  - Đã biết kết quả mà chưa ghi: ghi bản `missed`.
+- **Ledger:** `data/shadow/BTCUSDT-1d-shadow.jsonl`, chỉ append, một writer (file `.lock`, lock quá 10 phút coi là treo).
+  - Khoá theo `symbol:1d:origin:shadow-version:label-version`. Bản ghi trùng id bị bỏ qua.
+  - Dòng cuối dở dang do crash được cô lập thành một dòng riêng.
+- **Resolver:** chấm khi nến target đã đóng. Nếu `issuedAt ≥ knownAt` thì bản ghi bị đánh dấu không hợp lệ.
+- **Vận hành:** timer chạy trong server mỗi 5 phút (`SHADOW_INTERVAL_MS`). Chỉ chạy khi start bằng `node server.js`; tắt bằng `SHADOW_ENABLED=0`. Máy tắt hoặc ngủ thì các origin đó thành late hoặc missed và được ghi rõ, không bị bỏ qua lặng lẽ.
+
 ## Lịch sử thay đổi
 
 | Ngày | Version | Thay đổi |
 |---|---|---|
 | 2026-11-24 | dataset-v1, sigma-ewma-v1, label-ksigma-v1, features-v1 | Bản đầu |
+| 2026-11-24 | shadow-v1 | Shadow forward baseline, hạn phát hành 1 giờ |
 | 2026-11-24 | replay-v1 | Đăng ký trước walk-forward, baseline, ứng viên M1, metric, cổng (trước lần chạy đầu) |

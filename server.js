@@ -5,12 +5,18 @@ import { fileURLToPath } from 'node:url';
 import { inferTrend } from './lib/scoring.js';
 import { klinesToCandles, summarizeTimeframe } from './lib/indicators.js';
 import { buildMarketReport } from './lib/analysis.js';
+import { runShadowCycle } from './lib/shadow-runner.js';
 import { computeAbsMovePct, num, pctChange, std, summarizeMoves, toClosedKlines } from './lib/stats.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PORT = Number(process.env.PORT || 7000);
 // Mặc định chỉ nhận kết nối từ máy này (dashboard không có xác thực). Đặt HOST=0.0.0.0 để mở ra mạng LAN.
 const HOST = process.env.HOST || '127.0.0.1';
+// Shadow forward (docs/P1_SPEC.md, REVISED_ROADMAP P1): ghi dự báo baseline mỗi lần nến ngày đóng vào data/shadow/.
+// Chỉ chạy khi start server trực tiếp; SHADOW_ENABLED=0 để tắt.
+const SHADOW_ENABLED = process.env.SHADOW_ENABLED !== '0';
+const SHADOW_INTERVAL_MS = Number(process.env.SHADOW_INTERVAL_MS || 5 * 60 * 1000);
+const SHADOW_DIR = join(fileURLToPath(new URL('.', import.meta.url)), 'data', 'shadow');
 const REFRESH_MS = Number(process.env.REFRESH_MS || 5000);
 const USDC_REFRESH_MS = Number(process.env.USDC_REFRESH_MS || 3600000);
 const TECHNICALS_REFRESH_MS = Number(process.env.TECHNICALS_REFRESH_MS || 60 * 1000);
@@ -1207,7 +1213,7 @@ const server = createServer(async (req, res) => {
 
   if (url.pathname === '/api/health') {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ ok: true, now: new Date().toISOString(), port: PORT }));
+    res.end(JSON.stringify({ ok: true, now: new Date().toISOString(), port: PORT, shadow: shadowState }));
     return;
   }
 
@@ -1228,9 +1234,32 @@ function resetCaches() {
   Object.assign(calendarCache, { events: [], ok: false, error: null, inflight: null, lastAttemptAt: 0, updatedAt: 0 });
 }
 
-function start(port = PORT, host = HOST) {
+// Trạng thái chu kỳ shadow gần nhất, trả qua /api/health. Timer độc lập với request/SSE.
+const shadowState = { enabled: false, lastRunAt: null, lastResult: null, error: null };
+
+async function shadowTick() {
+  try {
+    const result = await runShadowCycle({ fetchJson: (url) => fetchJson(url, 15000), dir: SHADOW_DIR, symbol: 'BTCUSDT' });
+    shadowState.lastResult = result.skipped ? { skipped: result.skipped } : { actions: result.actions, written: result.written, status: result.status };
+    shadowState.error = null;
+    if (result.written) console.log(`Shadow: ghi ${result.written} bản ghi (${result.actions.join(', ')})`);
+  } catch (err) {
+    shadowState.error = err.message;
+    console.error('Shadow cycle lỗi:', err.message);
+  } finally {
+    shadowState.lastRunAt = new Date().toISOString();
+  }
+}
+
+function start(port = PORT, host = HOST, { shadow = false } = {}) {
   const timer = setInterval(refreshAllClients, REFRESH_MS);
   server.once('close', () => clearInterval(timer));
+  if (shadow) {
+    shadowState.enabled = true;
+    shadowTick();
+    const shadowTimer = setInterval(shadowTick, SHADOW_INTERVAL_MS);
+    server.once('close', () => clearInterval(shadowTimer));
+  }
   return new Promise((done) => {
     server.listen(port, host, () => {
       const { address, port: boundPort } = server.address();
@@ -1242,7 +1271,7 @@ function start(port = PORT, host = HOST) {
 
 // Chỉ tự listen khi chạy trực tiếp `node server.js`; import từ test thì không.
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  start();
+  start(PORT, HOST, { shadow: SHADOW_ENABLED });
 }
 
 export { getSnapshot, resetCaches, start, server, sseClients };

@@ -12,7 +12,7 @@ Lộ trình đang theo: [REVISED_ROADMAP](REVISED_ROADMAP.md). Phạm vi đượ
 | P1-2. Feature/nhãn point-in-time (features-v1, label-ksigma-v1) | **Xong** | 2026-11-24 |
 | P1-3. Replay rolling-origin + baseline (replay-v1) | **Xong**: ứng viên M1 **không qua cổng** | 2026-11-24 |
 | P1-4. Kiểm archive metrics Binance (OI/LS) | **Xong**: OI/Global L/S/taker đủ từ 2020-09, top trader loại, **không cần collector** ([P1_ARCHIVE_CHECK](P1_ARCHIVE_CHECK.md)) | 2026-11-24 |
-| P1 shadow forward | **Chưa bắt đầu** | — |
+| P1 shadow forward (shadow-v1) | **Đang chạy** từ origin 2026-11-23 (dự báo đầu là late vì bật lúc 17h UTC) | 2026-11-24 |
 
 Lưu ý: working tree đã có thay đổi chưa commit từ trước phiên này (README, `server.js`, `public/*-new.*`, `lib/analysis.js`, `lib/indicators.js`, `test/`). `git diff` vì vậy gộp cả hai phần. Chưa commit theo quy ước repo.
 
@@ -163,6 +163,17 @@ Spec được đăng ký và commit **trước** lần chạy đầu (commit `1e
 1. **Tỷ lệ lớp thực tế khác giả định.** Trong tập test, tăng 25,8%, ngang 50,0%, giảm 24,2%. PROBABILITY_MODEL_DESIGN §2 giả định khoảng 31/38/31 (ghi rõ "[Suy luận, sẽ đo lại]"). Nguyên nhân: return ngày BTC có đỉnh nhọn và đuôi dày hơn phân phối chuẩn, nên band ±0,5σ chứa khoảng 50% số ngày. Đây cũng là lý do G thua M0 2,8%.
 2. **Baseline M0 (trượt 2 năm) yếu hơn B2 (expanding)** một cách có ý nghĩa: CI của B2 hoàn toàn dương. Nếu so với B2 thì M1 kém hơn khoảng 0,38%. Đề xuất cho version sau: dùng baseline quyết định mạnh hơn, hoặc so với cả hai.
 3. M1 chọn α = 100 (co mạnh nhất) ở 30/48 fold, nghĩa là ô feature gần như không mang thông tin trong CV nội bộ. BSS theo năm dao động +0,23% (2022) → −0,39% (2024).
+
+## P1 shadow forward (2026-11-24)
+
+Spec: [P1_SPEC §8](P1_SPEC.md). Code: `lib/shadow.js` (thuần), `lib/shadow-runner.js` (I/O, lock), timer trong `server.js` (`/api/health` trả trạng thái), CLI `node scripts/shadow.js status|run`. `fitModelsAtCutoff` được tách ra khỏi `runReplay` để live và replay dùng chung; report replay-v1 vẫn ra cùng sha256 `528720341bfb…` sau khi refactor.
+
+**Kiểm chứng:**
+- Test: parity shadow = replay; phát hành đúng hạn / trễ / bỏ lỡ; chấm chỉ khi nến target đã đóng; phát hành sau khi biết kết quả bị đánh dấu không hợp lệ; dòng cuối dở dang; chạy lại không ghi trùng và không tải nến; tắt máy 3 ngày; lock.
+- Chạy thật: chu kỳ đầu ghi `start` + dự báo origin 2026-11-23 (late, phát hành 16:59 UTC). Chạy lại không ghi gì. `dataFingerprint` của dự báo trùng sha256 dataset đã đóng băng.
+- `npm test`: 71 pass / 0 fail.
+
+**Giới hạn:** shadow chỉ chạy khi server đang chạy, không có service hệ thống. Cần khoảng 30 dự báo đúng hạn đã chấm mới đọc được số sơ bộ, và vài trăm mới đủ để kết luận (VALIDATION_STRATEGY §5).
 
 ## Quyết định cần chốt trước P1 (theo REVISED_ROADMAP)
 

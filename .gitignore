@@ -21,3 +21,4 @@ Thumbs.db
 
 # Dataset / shadow forecast lưu local (docs/P1_SPEC.md)
 data/
+test/.tmp-shadow/
