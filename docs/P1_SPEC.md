@@ -62,8 +62,46 @@ Tối đa 2 feature, cả hai chỉ dùng nến đã đóng tại origin:
 - Sửa dữ liệu sau cutoff không đổi feature tại cutoff. Thêm nến đang chạy không đổi feature.
 - Thiếu nến target cho nhãn `null`. Ranh giới `r = ±band` cho đúng lớp. Cùng input cho cùng output.
 
+## 7. Replay (`replay-v1`), đăng ký trước khi chạy
+
+Chốt với người dùng ngày 2026-11-24, trước lần chạy replay đầu tiên.
+
+**Tập dữ liệu**
+- Dùng dataset `BTCUSDT-1d-cutoff-2026-11-24` (sha256 `4d813d15…`). Chỉ lấy các origin có feature hợp lệ và có nhãn.
+- **Holdout xác nhận:** origin có `originOpenTime ≥ 2025-11-24` (khoảng 365 ngày). Code replay loại các origin này hoàn toàn. Chỉ chạy một lần, sau khi đã chọn xong mô hình, và cần quyết định riêng.
+
+**Walk-forward**
+- Refit vào 00:00 UTC ngày 1 mỗi tháng (cutoff). Train chỉ dùng nhãn có `knownAt ≤ cutoff`; đây là purge cho H = 1 ngày.
+- Train là cửa sổ trượt 730 ngày: `originOpenTime ≥ cutoff − 730 ngày`.
+- Test là các origin có `asOf` (= `closeTime + 1`) nằm trong `[cutoff, cutoff tháng sau)`. Tham số mô hình giữ cố định trong tháng.
+- Tháng test đầu tiên là tháng đầu có đủ 730 ngày nhãn hợp lệ trước cutoff.
+
+**Mô hình** (p là vector 3 lớp bullish / sideways / bearish)
+
+| Mô hình | Công thức |
+|---|---|
+| M0 climatology (baseline quyết định) | `p_k = (n_k + 1)/(N + 3)` trên cửa sổ train 730 ngày |
+| B2 phân phối return chuẩn hoá | Tần suất `z = r/σ` vượt ±k trên **toàn bộ** lịch sử đã biết (expanding), làm mượt như M0. Vì nhãn được định nghĩa bằng chính z, B2 tương đương climatology expanding. Đây là baseline phụ |
+| G tham chiếu Gauss | `p_side = Φ(k) − Φ(−k) = 0,3829`, `p_bull = p_bear = 0,3085`. Không fit; chỉ để chẩn đoán |
+| M1 ứng viên shrinkage | Ô `s = [trend50 ≥ 0] × [mom1z ≥ 0]` (4 ô). `p_k(s) = (n_k(s) + α·p0_k)/(N(s) + α)` trên cửa sổ train, với p0 là M0 |
+
+**Chọn α cho M1:** α thuộc {20, 50, 100}, chọn bằng CV lồng trong tập train.
+- Validation là 180 origin cuối của tập train; fit trên cửa sổ 730 ngày kết thúc trước validation.
+- Chọn α có Brier thấp nhất. Nếu hoà thì lấy α lớn hơn (co nhiều hơn).
+
+**Metric và cổng**
+- Brier là tổng trên 3 lớp `Σ_k (p_k − o_k)²`; log loss kẹp p ≥ 1e-6.
+- `BSS = 1 − mean(Brier_M1)/mean(Brier_M0)`.
+- Khoảng tin cậy: circular block bootstrap ghép cặp, **block 7 origin**, 2.000 lần lặp, seed 12345, lấy percentile CI 90%. Sensitivity với block 1 và 30.
+- **Cổng đạt** (chỉ để quyết định có đi tiếp tới holdout hay không): BSS > 0, cận dưới CI 90% > 0, và log loss của M1 ≤ M0.
+- Báo thêm: BSS theo từng năm, độ hiệu chuẩn (reliability, ECE 10 bin), phân bố xác suất dự báo, số mẫu, α được chọn ở từng fold.
+- **Đối chứng null:** M1 với ô bị xáo ngẫu nhiên (seed 12345), kỳ vọng BSS ≤ 0.
+
+**Tái lập:** report ghi sha256 dataset, version spec và seed. Chạy lại phải ra cùng số. Mọi lần chạy được ghi một dòng vào `data/reports/experiments.jsonl`.
+
 ## Lịch sử thay đổi
 
 | Ngày | Version | Thay đổi |
 |---|---|---|
 | 2026-11-24 | dataset-v1, sigma-ewma-v1, label-ksigma-v1, features-v1 | Bản đầu |
+| 2026-11-24 | replay-v1 | Đăng ký trước walk-forward, baseline, ứng viên M1, metric, cổng (trước lần chạy đầu) |
