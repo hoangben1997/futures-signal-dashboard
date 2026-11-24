@@ -11,7 +11,7 @@ Lộ trình đang theo: [REVISED_ROADMAP](REVISED_ROADMAP.md). Phạm vi đượ
 | P1-1. Data contract (dataset-v1) | **Xong** | 2026-11-24 |
 | P1-2. Feature/nhãn point-in-time (features-v1, label-ksigma-v1) | **Xong** | 2026-11-24 |
 | P1-3. Replay rolling-origin + baseline (replay-v1) | **Xong**: ứng viên M1 **không qua cổng** | 2026-11-24 |
-| P1-4. Kiểm archive metrics Binance (OI/LS) | **Chưa bắt đầu** | — |
+| P1-4. Kiểm archive metrics Binance (OI/LS) | **Xong**: OI/Global L/S/taker đủ từ 2020-09, top trader loại, **không cần collector** ([P1_ARCHIVE_CHECK](P1_ARCHIVE_CHECK.md)) | 2026-11-24 |
 | P1 shadow forward | **Chưa bắt đầu** | — |
 
 Lưu ý: working tree đã có thay đổi chưa commit từ trước phiên này (README, `server.js`, `public/*-new.*`, `lib/analysis.js`, `lib/indicators.js`, `test/`). `git diff` vì vậy gộp cả hai phần. Chưa commit theo quy ước repo.
