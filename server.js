@@ -1,14 +1,17 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { extname, join } from 'node:path';
+import { extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inferTrend } from './lib/scoring.js';
+import { klinesToCandles, summarizeTimeframe } from './lib/indicators.js';
+import { buildMarketReport } from './lib/analysis.js';
+import { computeAbsMovePct, num, pctChange, std, summarizeMoves, toClosedKlines } from './lib/stats.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PORT = Number(process.env.PORT || 7000);
 const REFRESH_MS = Number(process.env.REFRESH_MS || 5000);
-const USDC_REFRESH_MS = Number(process.env.USDC_REFRESH_MS || 60000);
-const HIST_MODEL_REFRESH_MS = Number(process.env.HIST_MODEL_REFRESH_MS || 6 * 60 * 60 * 1000);
+const USDC_REFRESH_MS = Number(process.env.USDC_REFRESH_MS || 3600000);
+const TECHNICALS_REFRESH_MS = Number(process.env.TECHNICALS_REFRESH_MS || 60 * 1000);
 const ETH_RPC_URL = process.env.ETH_RPC_URL || '';
 const ETH_RPC_FALLBACKS = (process.env.ETH_RPC_FALLBACKS || '')
   .split(',')
@@ -31,10 +34,13 @@ const sseClients = new Set();
 const usdcEventsCache = {
   events: [],
   source: 'none',
+  ok: false,
+  error: null,
+  inflight: null,
   lastAttemptAt: 0,
   updatedAt: 0
 };
-const historicalScenarioCache = new Map();
+const technicalsCache = new Map();
 
 async function fetchJson(url, timeoutMs = 8000) {
   const controller = new AbortController();
@@ -192,11 +198,13 @@ async function fetchUSDCMintingEventsFromRpc(rpcUrl) {
     });
   }
 
-  return events.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  const sorted = events.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  console.log(`Fetched ${sorted.length} USDC events from RPC (72H)`);
+  return sorted;
 }
 
 async function fetchUSDCMintingEventsFromEtherscan() {
-  try {
+  {
     // USDC Treasury wallet trên Ethereum (theo Whale Alert)
     const USDC_TREASURY = '0x55fe002aeff02f77364de339a1292923a15844b8';
     const USDC_CONTRACT = '0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48';
@@ -208,15 +216,14 @@ async function fetchUSDCMintingEventsFromEtherscan() {
     const now = Math.floor(Date.now() / 1000);
     const cutoffTime = now - (72 * 60 * 60);
     const treasuryLc = USDC_TREASURY.toLowerCase();
-    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx&address=${USDC_TREASURY}&contractaddress=${USDC_CONTRACT}&page=1&offset=100&sort=desc&apikey=${ETHERSCAN_API_KEY}`;
+    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx&address=${USDC_TREASURY}&contractaddress=${USDC_CONTRACT}&page=1&offset=500&sort=desc&apikey=${ETHERSCAN_API_KEY}`;
 
     const response = await fetchJson(url, 10000);
 
+    // status '0' + "No transactions found" là kết quả rỗng hợp lệ; mọi trường hợp khác là lỗi nguồn
+    if (response.status === '0' && /no transactions found/i.test(String(response.message || ''))) return [];
     if (response.status !== '1' || !Array.isArray(response.result)) {
-      if (response.result) {
-        console.error('USDC events API non-success:', response.result);
-      }
-      return [];
+      throw new Error(`Etherscan non-success: ${typeof response.result === 'string' ? response.result : response.message || 'unknown'}`);
     }
 
     const events = [];
@@ -254,27 +261,26 @@ async function fetchUSDCMintingEventsFromEtherscan() {
       });
     }
 
-    return events.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-  } catch (err) {
-    console.error('Error fetching USDC events from Etherscan:', err);
-    return [];
+    const sorted = events.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    console.log(`Fetched ${sorted.length} USDC events from Etherscan (72H)`);
+    return sorted;
   }
 }
 
 async function fetchUSDCMintingEventsFromWhaleAlert() {
-  try {
+  {
     const now = Math.floor(Date.now() / 1000);
     const start = now - (72 * 60 * 60);
     const url = `https://whale-alert.io/alerts.json?start=${start}&end=${now}`;
 
     const raw = await fetchText(url, 10000);
-    let rows = [];
+    let rows;
     try {
       rows = JSON.parse(raw);
     } catch {
-      rows = [];
+      throw new Error('Whale Alert trả dữ liệu không phải JSON');
     }
-    if (!Array.isArray(rows)) return [];
+    if (!Array.isArray(rows)) throw new Error('Whale Alert trả dữ liệu sai định dạng');
 
     const events = [];
     for (const row of rows) {
@@ -303,59 +309,64 @@ async function fetchUSDCMintingEventsFromWhaleAlert() {
       });
     }
 
-    return events.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-  } catch (err) {
-    console.error('Error fetching USDC events from Whale Alert:', err);
-    return [];
+    const sorted = events.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    console.log(`Fetched ${sorted.length} USDC events from Whale Alert (72H)`);
+    return sorted;
   }
 }
 
+// Thử lần lượt các nguồn; nguồn lỗi thì chuyển nguồn kế tiếp. Chỉ throw khi đã thử hết.
+// Mảng rỗng từ một nguồn chạy thành công là kết quả hợp lệ ("không có sự kiện"), không phải lỗi.
 async function fetchUSDCMintingEventsUncached() {
-  if (ETH_RPC_URL) {
+  const attempts = [];
+  if (ETH_RPC_URL) attempts.push(['rpc', () => fetchUSDCMintingEventsFromRpc(ETH_RPC_URL)]);
+  if (ETHERSCAN_API_KEY && ETHERSCAN_API_KEY !== 'YourApiKeyToken') attempts.push(['etherscan', fetchUSDCMintingEventsFromEtherscan]);
+  for (const rpcUrl of ETH_RPC_FALLBACKS) attempts.push(['rpc-fallback', () => fetchUSDCMintingEventsFromRpc(rpcUrl)]);
+  attempts.push(['whale-alert', fetchUSDCMintingEventsFromWhaleAlert]);
+
+  const failures = [];
+  for (const [source, run] of attempts) {
     try {
-      const rpcEvents = await fetchUSDCMintingEventsFromRpc(ETH_RPC_URL);
-      return rpcEvents;
+      const events = await run();
+      return { events: Array.isArray(events) ? events : [], source };
     } catch (err) {
-      console.error(`Error fetching USDC events from RPC (${ETH_RPC_URL}):`, err);
+      console.error(`Error fetching USDC events from ${source}:`, err.message);
+      failures.push(`${source}: ${err.message}`);
     }
   }
+  throw new Error(failures.join('; '));
+}
 
-  if (ETHERSCAN_API_KEY && ETHERSCAN_API_KEY !== 'YourApiKeyToken') {
-    const eEvents = await fetchUSDCMintingEventsFromEtherscan();
-    return eEvents;
-  }
-
-  const whaleEvents = await fetchUSDCMintingEventsFromWhaleAlert();
-  if (whaleEvents.length || ETH_RPC_FALLBACKS.length === 0) return whaleEvents;
-
-  for (const rpcUrl of ETH_RPC_FALLBACKS) {
-    try {
-      const rpcEvents = await fetchUSDCMintingEventsFromRpc(rpcUrl);
-      return rpcEvents;
-    } catch (err) {
-      console.error(`Error fetching USDC events from fallback RPC (${rpcUrl}):`, err);
-    }
-  }
-
-  return whaleEvents;
+// Trạng thái trả cho snapshot: lỗi sau khi thử hết nguồn thì giữ dữ liệu cũ và đánh dấu stale.
+function usdcStatus() {
+  const c = usdcEventsCache;
+  return {
+    ok: c.ok,
+    events: c.events,
+    source: c.source,
+    error: c.error,
+    stale: !c.ok && c.events.length > 0,
+    fetchedAt: c.updatedAt ? new Date(c.updatedAt).toISOString() : null
+  };
 }
 
 async function fetchUSDCMintingEvents() {
-  const now = Date.now();
-  if (usdcEventsCache.lastAttemptAt > 0 && now - usdcEventsCache.lastAttemptAt < USDC_REFRESH_MS) {
-    return usdcEventsCache.events;
-  }
-  usdcEventsCache.lastAttemptAt = now;
-
-  try {
-    const events = await fetchUSDCMintingEventsUncached();
-    usdcEventsCache.events = Array.isArray(events) ? events : [];
-    usdcEventsCache.updatedAt = Date.now();
-    return usdcEventsCache.events;
-  } catch (err) {
-    console.error('Error fetching USDC events (cached wrapper):', err);
-    return usdcEventsCache.events;
-  }
+  const c = usdcEventsCache;
+  if (c.inflight) return c.inflight;
+  if (c.lastAttemptAt > 0 && Date.now() - c.lastAttemptAt < USDC_REFRESH_MS) return usdcStatus();
+  c.lastAttemptAt = Date.now();
+  c.inflight = (async () => {
+    try {
+      const { events, source } = await fetchUSDCMintingEventsUncached();
+      Object.assign(c, { events, source, ok: true, error: null, updatedAt: Date.now() });
+    } catch (err) {
+      Object.assign(c, { ok: false, error: err.message });
+    } finally {
+      c.inflight = null;
+    }
+    return usdcStatus();
+  })();
+  return c.inflight;
 }
 
 function decodeHtmlEntities(input = '') {
@@ -562,549 +573,72 @@ async function fetchForexFactoryWeekJson() {
 // Economic Calendar Cache
 const calendarCache = {
   events: [],
+  ok: false,
+  error: null,
+  inflight: null,
   lastAttemptAt: 0,
   updatedAt: 0
 };
 
+function calendarStatus() {
+  const c = calendarCache;
+  return {
+    ok: c.ok,
+    events: c.events,
+    error: c.error,
+    stale: !c.ok && c.events.length > 0,
+    fetchedAt: c.updatedAt ? new Date(c.updatedAt).toISOString() : null
+  };
+}
+
+async function fetchEconomicCalendarUncached() {
+  const failures = [];
+  // Primary source: ForexFactory weekly JSON
+  try {
+    const ffJsonEvents = await fetchForexFactoryWeekJson();
+    console.log(`Fetched ${ffJsonEvents.length} high-impact calendar events (ForexFactory JSON)`);
+    return ffJsonEvents;
+  } catch (err) {
+    console.warn('ForexFactory JSON calendar failed:', err.message);
+    failures.push(`ForexFactory: ${err.message}`);
+  }
+
+  // Secondary source: TradingEconomics API only when user provides real API key
+  const hasRealTeKey = Boolean(TRADING_ECONOMICS_API_KEY) && TRADING_ECONOMICS_API_KEY !== 'guest:guest';
+  if (hasRealTeKey) {
+    try {
+      const teEvents = await fetchTradingEconomicsCalendarWeek();
+      console.log(`Fetched ${teEvents.length} high-impact calendar events (TradingEconomics)`);
+      return teEvents;
+    } catch (err) {
+      console.warn('TradingEconomics calendar fallback failed:', err.message);
+      failures.push(`TradingEconomics: ${err.message}`);
+    }
+  }
+  throw new Error(failures.join('; '));
+}
+
 async function fetchEconomicCalendar() {
-  const now = Date.now();
+  const c = calendarCache;
+  if (c.inflight) return c.inflight;
   // Cache policy:
   // - If have cached events: reuse up to 4h
   // - If empty cache (last attempt failed/empty): retry every 2m
-  const hasCachedEvents = Array.isArray(calendarCache.events) && calendarCache.events.length > 0;
-  const minRetryMs = hasCachedEvents ? 4 * 60 * 60 * 1000 : 2 * 60 * 1000;
-  if (calendarCache.lastAttemptAt > 0 && now - calendarCache.lastAttemptAt < minRetryMs) {
-    return calendarCache.events;
-  }
-  calendarCache.lastAttemptAt = now;
-
-  try {
-    // Primary source: ForexFactory weekly JSON
+  const minRetryMs = c.events.length > 0 ? 4 * 60 * 60 * 1000 : 2 * 60 * 1000;
+  if (c.lastAttemptAt > 0 && Date.now() - c.lastAttemptAt < minRetryMs) return calendarStatus();
+  c.lastAttemptAt = Date.now();
+  c.inflight = (async () => {
     try {
-      const ffJsonEvents = await fetchForexFactoryWeekJson();
-      if (ffJsonEvents.length) {
-        calendarCache.events = ffJsonEvents;
-        calendarCache.updatedAt = Date.now();
-        console.log(`Fetched ${calendarCache.events.length} high-impact calendar events (ForexFactory JSON)`);
-        return calendarCache.events;
-      }
+      const events = await fetchEconomicCalendarUncached();
+      Object.assign(c, { events, ok: true, error: null, updatedAt: Date.now() });
     } catch (err) {
-      console.warn('ForexFactory JSON calendar failed:', err.message);
+      Object.assign(c, { ok: false, error: err.message });
+    } finally {
+      c.inflight = null;
     }
-
-    // Secondary source: TradingEconomics API only when user provides real API key
-    const hasRealTeKey = Boolean(TRADING_ECONOMICS_API_KEY) && TRADING_ECONOMICS_API_KEY !== 'guest:guest';
-    try {
-      if (hasRealTeKey) {
-        const teEvents = await fetchTradingEconomicsCalendarWeek();
-        if (teEvents.length) {
-          calendarCache.events = teEvents;
-          calendarCache.updatedAt = Date.now();
-          console.log(`Fetched ${calendarCache.events.length} high-impact calendar events (TradingEconomics)`);
-          return calendarCache.events;
-        }
-      }
-    } catch (err) {
-      console.warn('TradingEconomics calendar fallback failed:', err.message);
-    }
-  } catch (err) {
-    console.error('Error fetching economic calendar:', err.message);
-    return calendarCache.events; // Return cached data on error
-  }
-
-  return calendarCache.events;
-}
-
-function pctChange(oldValue, newValue) {
-  if (!oldValue || !newValue) return null;
-  return ((newValue - oldValue) / oldValue) * 100;
-}
-
-function num(x) {
-  const n = Number(x);
-  return Number.isFinite(n) ? n : null;
-}
-
-function finiteOr(value, fallback = 0) {
-  return Number.isFinite(value) ? value : fallback;
-}
-
-function std(values) {
-  if (!Array.isArray(values) || values.length < 2) return null;
-  const mean = values.reduce((a, b) => a + b, 0) / values.length;
-  const variance = values.reduce((a, b) => a + (b - mean) ** 2, 0) / (values.length - 1);
-  return Math.sqrt(variance);
-}
-
-function toClosedKlines(klines, nowMs = Date.now()) {
-  if (!Array.isArray(klines) || !klines.length) return [];
-  const rows = klines.filter((k) => Array.isArray(k) && k.length >= 7);
-  if (!rows.length) return [];
-  const last = rows[rows.length - 1];
-  const closeTime = num(last?.[6]);
-  if (closeTime !== null && nowMs < closeTime) {
-    return rows.slice(0, -1);
-  }
-  return rows;
-}
-
-function percentile(values, pct) {
-  if (!Array.isArray(values) || !values.length) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  const rank = (pct / 100) * (sorted.length - 1);
-  const lo = Math.floor(rank);
-  const hi = Math.ceil(rank);
-  if (lo === hi) return sorted[lo];
-  const w = rank - lo;
-  return sorted[lo] * (1 - w) + sorted[hi] * w;
-}
-
-function computeAbsMovePct(closes, lag = 1) {
-  if (!Array.isArray(closes) || closes.length <= lag) return [];
-  const moves = [];
-  for (let i = lag; i < closes.length; i += 1) {
-    const oldV = closes[i - lag];
-    const newV = closes[i];
-    if (!oldV || !newV) continue;
-    moves.push(Math.abs(((newV - oldV) / oldV) * 100));
-  }
-  return moves;
-}
-
-function summarizeMoves(moves) {
-  return {
-    samples: moves.length,
-    p50MovePct: num(percentile(moves, 50)?.toFixed(4)),
-    p75MovePct: num(percentile(moves, 75)?.toFixed(4))
-  };
-}
-
-function signBucket(value, eps = 0.02) {
-  if (!Number.isFinite(value)) return 'flat';
-  if (value > eps) return 'up';
-  if (value < -eps) return 'down';
-  return 'flat';
-}
-
-function classifyOutcome(futureChangePct, thresholdPct) {
-  if (!Number.isFinite(futureChangePct) || !Number.isFinite(thresholdPct) || thresholdPct <= 0) return 'sideway';
-  if (futureChangePct >= thresholdPct) return 'up';
-  if (futureChangePct <= -thresholdPct) return 'down';
-  return 'sideway';
-}
-
-function incrementOutcome(target, outcome) {
-  if (outcome === 'up') target.up += 1;
-  else if (outcome === 'down') target.down += 1;
-  else target.sideway += 1;
-}
-
-function emptyOutcomeCounts() {
-  return { up: 0, down: 0, sideway: 0 };
-}
-
-function probsFromCounts(counts) {
-  const total = (counts.up || 0) + (counts.down || 0) + (counts.sideway || 0);
-  if (!total) return null;
-  return {
-    samples: total,
-    up: (counts.up / total) * 100,
-    down: (counts.down / total) * 100,
-    sideway: (counts.sideway / total) * 100
-  };
-}
-
-function normalize3(up, down, sideway) {
-  let a = Number.isFinite(up) ? up : 0;
-  let b = Number.isFinite(down) ? down : 0;
-  let c = Number.isFinite(sideway) ? sideway : 0;
-  a = Math.max(0.5, a);
-  b = Math.max(0.5, b);
-  c = Math.max(0.5, c);
-  const total = a + b + c;
-  return { up: (a / total) * 100, down: (b / total) * 100, sideway: (c / total) * 100 };
-}
-
-function emaSeries(values, period) {
-  if (!Array.isArray(values) || !values.length || period <= 1) return [];
-  const out = [];
-  const k = 2 / (period + 1);
-  let prev = values[0];
-  out.push(prev);
-  for (let i = 1; i < values.length; i += 1) {
-    const v = values[i];
-    prev = (v * k) + (prev * (1 - k));
-    out.push(prev);
-  }
-  return out;
-}
-
-function latestPositionState(closes, lookback = 90) {
-  if (!Array.isArray(closes) || closes.length < Math.max(lookback, 3)) return 'mid';
-  const window = closes.slice(-lookback);
-  const hi = Math.max(...window);
-  const lo = Math.min(...window);
-  const last = closes[closes.length - 1];
-  const r = hi > lo ? (last - lo) / (hi - lo) : 0.5;
-  if (r >= 0.7) return 'high';
-  if (r <= 0.3) return 'low';
-  return 'mid';
-}
-
-function stateEdge(counts, state) {
-  const row = counts?.[state];
-  if (!row) return { edge: 0, samples: 0 };
-  const total = (row.up || 0) + (row.down || 0) + (row.sideway || 0);
-  if (!total) return { edge: 0, samples: 0 };
-  const rawEdge = ((row.up || 0) - (row.down || 0)) / total;
-  const shrink = Math.min(1, total / 80);
-  return { edge: rawEdge * shrink, samples: total };
-}
-
-function buildFeatureCountsStructure() {
-  return {
-    trend: { bull: emptyOutcomeCounts(), bear: emptyOutcomeCounts() },
-    momentum: { up: emptyOutcomeCounts(), down: emptyOutcomeCounts(), flat: emptyOutcomeCounts() },
-    position: { high: emptyOutcomeCounts(), mid: emptyOutcomeCounts(), low: emptyOutcomeCounts() },
-    volatility: { high: emptyOutcomeCounts(), low: emptyOutcomeCounts() }
-  };
-}
-
-function computeScenarioProbsFromState(countsAll, buckets, featureCounts, sampleState) {
-  const all = probsFromCounts(countsAll);
-  if (!all) return null;
-
-  const sign = sampleState.momentumState || 'flat';
-  const volState = sampleState.volState || 'low';
-  const conditional = probsFromCounts(buckets?.[`${sign}_${volState}`] || emptyOutcomeCounts());
-  const base = (!conditional || conditional.samples < 35)
-    ? { ...all, mode: 'unconditional' }
-    : { ...conditional, mode: 'conditional' };
-
-  const trendState = sampleState.trendState === 'bull' ? 'bull' : 'bear';
-  const positionState = ['high', 'mid', 'low'].includes(sampleState.positionState) ? sampleState.positionState : 'mid';
-
-  const eTrend = stateEdge(featureCounts?.trend, trendState);
-  const eMomentum = stateEdge(featureCounts?.momentum, sign);
-  const ePosition = stateEdge(featureCounts?.position, positionState);
-  const eVol = stateEdge(featureCounts?.volatility, volState);
-
-  const formulaScore = clamp(
-    (eTrend.edge * 0.4) + (eMomentum.edge * 0.3) + (ePosition.edge * 0.2) + (eVol.edge * 0.1),
-    -1,
-    1
-  );
-  const tilt = formulaScore * 12;
-  const adjusted = normalize3(
-    base.up + tilt,
-    base.down - tilt,
-    base.sideway - Math.abs(formulaScore) * 4
-  );
-
-  return {
-    ...adjusted,
-    mode: base.mode,
-    formulaScore
-  };
-}
-
-function computeBacktestMetrics(samples) {
-  if (!Array.isArray(samples) || samples.length < 140) return null;
-  const split = Math.floor(samples.length * 0.7);
-  const train = samples.slice(0, split);
-  const test = samples.slice(split);
-  if (train.length < 80 || test.length < 40) return null;
-
-  const countsAll = emptyOutcomeCounts();
-  const buckets = {};
-  const featureCounts = buildFeatureCountsStructure();
-
-  for (const s of train) {
-    incrementOutcome(countsAll, s.outcome);
-    const key = `${s.momentumState}_${s.volState}`;
-    if (!buckets[key]) buckets[key] = emptyOutcomeCounts();
-    incrementOutcome(buckets[key], s.outcome);
-    incrementOutcome(featureCounts.trend[s.trendState], s.outcome);
-    incrementOutcome(featureCounts.momentum[s.momentumState], s.outcome);
-    incrementOutcome(featureCounts.position[s.positionState], s.outcome);
-    incrementOutcome(featureCounts.volatility[s.volState], s.outcome);
-  }
-
-  let brier = 0;
-  let top1Hits = 0;
-  let dirHits = 0;
-  let dirTotal = 0;
-
-  for (const s of test) {
-    const probs = computeScenarioProbsFromState(countsAll, buckets, featureCounts, s);
-    if (!probs) continue;
-
-    const pUp = probs.up / 100;
-    const pDown = probs.down / 100;
-    const pSide = probs.sideway / 100;
-    const oUp = s.outcome === 'up' ? 1 : 0;
-    const oDown = s.outcome === 'down' ? 1 : 0;
-    const oSide = s.outcome === 'sideway' ? 1 : 0;
-    brier += (((pUp - oUp) ** 2) + ((pDown - oDown) ** 2) + ((pSide - oSide) ** 2)) / 3;
-
-    const pred = pUp >= pDown && pUp >= pSide ? 'up' : pDown >= pUp && pDown >= pSide ? 'down' : 'sideway';
-    if (pred === s.outcome) top1Hits += 1;
-    if (s.outcome === 'up' || s.outcome === 'down') {
-      dirTotal += 1;
-      if (pred === s.outcome) dirHits += 1;
-    }
-  }
-
-  const n = test.length || 1;
-  return {
-    testSamples: test.length,
-    brierScore: num((brier / n).toFixed(4)),
-    top1AccuracyPct: num(((top1Hits * 100) / n).toFixed(2)),
-    directionalAccuracyPct: dirTotal ? num(((dirHits * 100) / dirTotal).toFixed(2)) : null
-  };
-}
-
-function klineIntervalMs(interval) {
-  if (interval === '4h') return 4 * 60 * 60 * 1000;
-  if (interval === '1d') return 24 * 60 * 60 * 1000;
-  throw new Error(`Unsupported interval: ${interval}`);
-}
-
-async function fetchBinanceKlinesRange(symbol, interval, startTimeMs, endTimeMs, limit = 1000, maxPages = 6) {
-  const rows = [];
-  const seen = new Set();
-  const stepMs = klineIntervalMs(interval);
-  let cursor = startTimeMs;
-
-  for (let page = 0; page < maxPages && cursor < endTimeMs; page += 1) {
-    const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&startTime=${cursor}&endTime=${endTimeMs}&limit=${limit}`;
-    const batch = await fetchJson(url, 12000);
-    if (!Array.isArray(batch) || !batch.length) break;
-
-    for (const k of batch) {
-      const openTime = num(k?.[0]);
-      if (!Number.isFinite(openTime) || seen.has(openTime)) continue;
-      seen.add(openTime);
-      rows.push(k);
-    }
-
-    const lastOpen = num(batch[batch.length - 1]?.[0]);
-    if (!Number.isFinite(lastOpen)) break;
-    const nextCursor = lastOpen + stepMs;
-    if (nextCursor <= cursor) break;
-    cursor = nextCursor;
-  }
-
-  rows.sort((a, b) => num(a?.[0]) - num(b?.[0]));
-  return rows;
-}
-
-function buildHistoricalTfStats(closes, horizonBars, thresholdPct, volWindowBars = 24) {
-  const countsAll = { up: 0, down: 0, sideway: 0 };
-  const samples = [];
-  if (!Array.isArray(closes) || closes.length < horizonBars + volWindowBars + 3) {
-    return { countsAll, buckets: {}, medianVol: null, samples: 0, featureCounts: {} };
-  }
-
-  const ema20 = emaSeries(closes, 20);
-  const ema50 = emaSeries(closes, 50);
-
-  for (let i = volWindowBars; i + horizonBars < closes.length; i += 1) {
-    const nowPrice = closes[i];
-    const prevPrice = closes[i - horizonBars];
-    const nextPrice = closes[i + horizonBars];
-    if (!nowPrice || !prevPrice || !nextPrice) continue;
-
-    const momentum = ((nowPrice - prevPrice) / prevPrice) * 100;
-    const futureChange = ((nextPrice - nowPrice) / nowPrice) * 100;
-    const outcome = classifyOutcome(futureChange, thresholdPct);
-
-    const logRets = [];
-    for (let j = i - volWindowBars + 1; j <= i; j += 1) {
-      const a = closes[j - 1];
-      const b = closes[j];
-      if (a > 0 && b > 0) logRets.push(Math.log(b / a));
-    }
-    const vol = std(logRets);
-    if (!Number.isFinite(vol)) continue;
-
-    const hi = Math.max(...closes.slice(Math.max(0, i - 89), i + 1));
-    const lo = Math.min(...closes.slice(Math.max(0, i - 89), i + 1));
-    const posRatio = hi > lo ? (nowPrice - lo) / (hi - lo) : 0.5;
-    const positionState = posRatio >= 0.7 ? 'high' : posRatio <= 0.3 ? 'low' : 'mid';
-    const trendState = (Number.isFinite(ema20[i]) && Number.isFinite(ema50[i]) && ema20[i] >= ema50[i]) ? 'bull' : 'bear';
-
-    samples.push({
-      momentum,
-      momentumState: signBucket(momentum),
-      vol: vol * 100,
-      positionState,
-      trendState,
-      outcome
-    });
-    incrementOutcome(countsAll, outcome);
-  }
-
-  const medianVol = percentile(samples.map((x) => x.vol), 50);
-  const buckets = {};
-  const featureCounts = buildFeatureCountsStructure();
-
-  for (const s of samples) {
-    const sign = s.momentumState;
-    const volState = Number.isFinite(medianVol) && s.vol >= medianVol ? 'high' : 'low';
-    s.volState = volState;
-    const key = `${sign}_${volState}`;
-    if (!buckets[key]) buckets[key] = { up: 0, down: 0, sideway: 0 };
-    incrementOutcome(buckets[key], s.outcome);
-    incrementOutcome(featureCounts.trend[s.trendState], s.outcome);
-    incrementOutcome(featureCounts.momentum[sign], s.outcome);
-    incrementOutcome(featureCounts.position[s.positionState], s.outcome);
-    incrementOutcome(featureCounts.volatility[volState], s.outcome);
-  }
-
-  return {
-    countsAll,
-    buckets,
-    featureCounts,
-    medianVol: Number.isFinite(medianVol) ? medianVol : null,
-    samples: samples.length,
-    backtest: computeBacktestMetrics(samples)
-  };
-}
-
-function pickHistoricalProbs(stats, context) {
-  if (!stats) return null;
-  const all = probsFromCounts(stats.countsAll);
-  if (!all) return null;
-
-  const sign = signBucket(context?.momentumPct);
-  const volState = Number.isFinite(stats.medianVol) && Number.isFinite(context?.volPct) && context.volPct >= stats.medianVol ? 'high' : 'low';
-  const trendState = context?.trendState === 'bull' ? 'bull' : 'bear';
-  const positionState = ['high', 'mid', 'low'].includes(context?.positionState) ? context.positionState : 'mid';
-  const probs = computeScenarioProbsFromState(stats.countsAll, stats.buckets, stats.featureCounts, {
-    momentumState: sign,
-    volState,
-    trendState,
-    positionState
-  });
-  if (!probs) return { ...all, mode: 'unconditional' };
-
-  const eTrend = stateEdge(stats.featureCounts?.trend, trendState);
-  const eMomentum = stateEdge(stats.featureCounts?.momentum, sign);
-  const ePosition = stateEdge(stats.featureCounts?.position, positionState);
-  const eVol = stateEdge(stats.featureCounts?.volatility, volState);
-
-  return {
-    samples: probsFromCounts(stats.buckets?.[`${sign}_${volState}`] || emptyOutcomeCounts())?.samples
-      || probsFromCounts(stats.countsAll)?.samples
-      || 0,
-    up: probs.up,
-    down: probs.down,
-    sideway: probs.sideway,
-    mode: probs.mode || 'unconditional',
-    formulaScore: probs.formulaScore,
-    drivers: {
-      trend: { state: trendState, edge: eTrend.edge, samples: eTrend.samples },
-      momentum: { state: sign, edge: eMomentum.edge, samples: eMomentum.samples },
-      position: { state: positionState, edge: ePosition.edge, samples: ePosition.samples },
-      volatility: { state: volState, edge: eVol.edge, samples: eVol.samples }
-    }
-  };
-}
-
-async function getHistoricalScenarioModel(symbol, tfThresholdMap, metrics) {
-  const nowMs = Date.now();
-  const cached = historicalScenarioCache.get(symbol);
-  if (cached && (nowMs - cached.updatedAt) < HIST_MODEL_REFRESH_MS) {
-    return cached.model;
-  }
-
-  const start4h = nowMs - (380 * 24 * 60 * 60 * 1000);
-  const start1d = nowMs - (420 * 24 * 60 * 60 * 1000);
-  const [k4h, k1d] = await Promise.all([
-    fetchBinanceKlinesRange(symbol, '4h', start4h, nowMs, 1000, 6),
-    fetchBinanceKlinesRange(symbol, '1d', start1d, nowMs, 1000, 2)
-  ]);
-
-  const close4h = toClosedKlines(k4h, nowMs).map((k) => num(k[4])).filter((x) => x !== null);
-  const close1d = toClosedKlines(k1d, nowMs).map((k) => num(k[4])).filter((x) => x !== null);
-
-  const fallbackThr = {
-    '4h': 1.0, '8h': 1.2, '12h': 1.4, '1d': 2.0, '3d': 3.5, '1w': 5.0
-  };
-  const thresholds = {
-    '4h': finiteOr(tfThresholdMap?.['4h'], fallbackThr['4h']),
-    '8h': finiteOr(tfThresholdMap?.['8h'], fallbackThr['8h']),
-    '12h': finiteOr(tfThresholdMap?.['12h'], fallbackThr['12h']),
-    '1d': finiteOr(tfThresholdMap?.['1d'], fallbackThr['1d']),
-    '3d': finiteOr(tfThresholdMap?.['3d'], fallbackThr['3d']),
-    '1w': finiteOr(tfThresholdMap?.['1w'], fallbackThr['1w'])
-  };
-
-  const stats = {
-    '4h': buildHistoricalTfStats(close4h, 1, thresholds['4h'], 18),
-    '8h': buildHistoricalTfStats(close4h, 2, thresholds['8h'], 18),
-    '12h': buildHistoricalTfStats(close4h, 3, thresholds['12h'], 18),
-    '1d': buildHistoricalTfStats(close1d, 1, thresholds['1d'], 14),
-    '3d': buildHistoricalTfStats(close1d, 3, thresholds['3d'], 14),
-    '1w': buildHistoricalTfStats(close1d, 7, thresholds['1w'], 14)
-  };
-
-  const momentumNow = {
-    '4h': finiteOr(metrics.closeChange4h, 0),
-    '8h': finiteOr(metrics.closeChange4h, 0),
-    '12h': finiteOr(metrics.closeChange4h, 0),
-    '1d': finiteOr(metrics.closeChange1d, 0),
-    '3d': finiteOr(metrics.closeChange1d, 0),
-    '1w': finiteOr(metrics.closeChange1w, 0)
-  };
-  const currentVol = {
-    '4h': finiteOr(metrics.realizedVol24h, 2.4) * Math.sqrt(4 / 24),
-    '8h': finiteOr(metrics.realizedVol24h, 2.4) * Math.sqrt(8 / 24),
-    '12h': finiteOr(metrics.realizedVol24h, 2.4) * Math.sqrt(12 / 24),
-    '1d': finiteOr(metrics.realizedVol24h, 2.4),
-    '3d': finiteOr(metrics.realizedVol24h, 2.4) * Math.sqrt(3),
-    '1w': finiteOr(metrics.realizedVol24h, 2.4) * Math.sqrt(7)
-  };
-  const currentPosition4h = latestPositionState(close4h, 90);
-  const currentPosition1d = latestPositionState(close1d, 90);
-  const ema204h = emaSeries(close4h, 20);
-  const ema504h = emaSeries(close4h, 50);
-  const ema201d = emaSeries(close1d, 20);
-  const ema501d = emaSeries(close1d, 50);
-  const trendState4h = (ema204h.length && ema504h.length && ema204h[ema204h.length - 1] >= ema504h[ema504h.length - 1]) ? 'bull' : 'bear';
-  const trendState1d = (ema201d.length && ema501d.length && ema201d[ema201d.length - 1] >= ema501d[ema501d.length - 1]) ? 'bull' : 'bear';
-
-  const model = {};
-  for (const tf of ['4h', '8h', '12h', '1d', '3d', '1w']) {
-    const context = {
-      momentumPct: momentumNow[tf],
-      volPct: currentVol[tf],
-      trendState: tf === '4h' || tf === '8h' || tf === '12h' ? trendState4h : trendState1d,
-      positionState: tf === '4h' || tf === '8h' || tf === '12h' ? currentPosition4h : currentPosition1d
-    };
-    const probs = pickHistoricalProbs(stats[tf], context);
-    if (!probs) continue;
-    model[tf] = {
-      up: num(probs.up?.toFixed(2)),
-      down: num(probs.down?.toFixed(2)),
-      sideway: num(probs.sideway?.toFixed(2)),
-      samples: probs.samples,
-      mode: probs.mode || 'unconditional',
-      thresholdPct: thresholds[tf],
-      formulaScore: num(probs.formulaScore?.toFixed(4)),
-      drivers: probs.drivers,
-      backtest: stats[tf].backtest || null
-    };
-  }
-
-  const payload = {
-    lookbackDays: 365,
-    generatedAt: new Date(nowMs).toISOString(),
-    byTimeframe: model
-  };
-  historicalScenarioCache.set(symbol, { updatedAt: nowMs, model: payload });
-  return payload;
+    return calendarStatus();
+  })();
+  return c.inflight;
 }
 
 function computeTimeframeVolatility30d(kline4h, kline1d, nowMs = Date.now()) {
@@ -1187,118 +721,236 @@ function computeCloseContext(klines) {
   };
 }
 
+// Cache theo khoá, gộp các lần gọi trùng khi đang tải (single-flight).
+// `loader` trả { value, ttlMs }; lỗi không được cache để lần sau thử lại.
+async function cachedLoad(cache, key, loader) {
+  const now = Date.now();
+  const entry = cache.get(key);
+  if (entry?.inflight) return entry.inflight;
+  if (entry && now - entry.at < entry.ttlMs) return entry.value;
+  const inflight = (async () => {
+    try {
+      const { value, ttlMs } = await loader();
+      cache.set(key, { value, ttlMs, at: Date.now() });
+      return value;
+    } catch (err) {
+      cache.delete(key);
+      throw err;
+    }
+  })();
+  cache.set(key, { ...entry, inflight });
+  return inflight;
+}
+
+// Một nguồn dữ liệu: không throw, luôn trả trạng thái để snapshot biết nguồn nào lỗi / cũ.
+// observedAt = thời điểm của điểm dữ liệu mới nhất theo nguồn; fetchedAt = lúc server nhận.
+async function loadSource(name, url, { maxAgeMs, observedAt }) {
+  const fetchedAt = Date.now();
+  try {
+    const value = await fetchJson(url);
+    const obs = observedAt ? observedAt(value) : null;
+    const observed = Number.isFinite(obs) ? Math.min(obs, fetchedAt) : null;
+    return {
+      name,
+      ok: true,
+      value,
+      fetchedAt,
+      observedAt: observed,
+      stale: observed !== null && fetchedAt - observed > maxAgeMs,
+      error: null
+    };
+  } catch (err) {
+    return { name, ok: false, value: null, fetchedAt, observedAt: null, stale: false, error: err.message };
+  }
+}
+
+const lastRowTime = (field) => (rows) => (Array.isArray(rows) && rows.length ? Number(rows[rows.length - 1]?.[field]) : null);
+const lastKlineCloseTime = (rows) => (Array.isArray(rows) && rows.length ? Number(rows[rows.length - 1]?.[6]) : null);
+const MIN = 60 * 1000;
+const HOUR = 60 * MIN;
+
+// Giới hạn nến theo symbol, cố định cho mọi horizon để các horizon dùng chung một lần fetch.
+// 1h lấy 96 (mức lớn nhất trước đây, horizon 1w); mỗi horizon cắt lại đúng số nến như logic cũ.
+const FETCH_LIMIT_1H = 96;
+const FETCH_LIMIT_4H = Math.ceil((30 * 24) / 4) + 3;
+const FETCH_LIMIT_1D = 30 + 7;
+const FETCH_LIMIT_1W = 8;
+const GLOBAL_FEED_TTL_MS = 5 * MIN;
+
+const symbolSourceCache = new Map();
+const globalSourceCache = new Map();
+
+function symbolSourceSpecs(symbol) {
+  const deribitCurrency = symbol.replace('USDT', '');
+  const kl = (interval, limit) => `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+  return {
+    premium: ['Binance premiumIndex', `https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol}`, { maxAgeMs: 5 * MIN, observedAt: (v) => Number(v?.time) }],
+    oiNow: ['Binance openInterest', `https://fapi.binance.com/fapi/v1/openInterest?symbol=${symbol}`, { maxAgeMs: 5 * MIN, observedAt: (v) => Number(v?.time) }],
+    oiHist: ['Binance openInterestHist', `https://fapi.binance.com/futures/data/openInterestHist?symbol=${symbol}&period=1h&limit=7`, { maxAgeMs: 2 * HOUR, observedAt: lastRowTime('timestamp') }],
+    lsHist: ['Binance globalLongShort', `https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${symbol}&period=1h&limit=5`, { maxAgeMs: 2 * HOUR, observedAt: lastRowTime('timestamp') }],
+    topTraderLs: ['Binance topTraderLongShort', `https://fapi.binance.com/futures/data/topLongShortPositionRatio?symbol=${symbol}&period=1h&limit=5`, { maxAgeMs: 2 * HOUR, observedAt: lastRowTime('timestamp') }],
+    takerFlow: ['Binance takerRatio', `https://fapi.binance.com/futures/data/takerlongshortRatio?symbol=${symbol}&period=1h&limit=5`, { maxAgeMs: 2 * HOUR, observedAt: lastRowTime('timestamp') }],
+    ticker24h: ['Binance ticker24h', `https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=${symbol}`, { maxAgeMs: 5 * MIN, observedAt: (v) => Number(v?.closeTime) }],
+    kline1h: ['Binance klines 1h', kl('1h', FETCH_LIMIT_1H), { maxAgeMs: 2 * HOUR, observedAt: lastKlineCloseTime }],
+    kline4h: ['Binance klines 4h', kl('4h', FETCH_LIMIT_4H), { maxAgeMs: 8 * HOUR, observedAt: lastKlineCloseTime }],
+    kline1d: ['Binance klines 1d', kl('1d', FETCH_LIMIT_1D), { maxAgeMs: 48 * HOUR, observedAt: lastKlineCloseTime }],
+    kline1w: ['Binance klines 1w', kl('1w', FETCH_LIMIT_1W), { maxAgeMs: 14 * 24 * HOUR, observedAt: lastKlineCloseTime }],
+    deribit: ['Deribit book summary', `https://www.deribit.com/api/v2/public/get_book_summary_by_currency?currency=${deribitCurrency}&kind=future`, {
+      maxAgeMs: 10 * MIN,
+      observedAt: (v) => Number(v?.result?.find((x) => x.instrument_name === `${deribitCurrency}-PERPETUAL`)?.creation_timestamp)
+    }]
+  };
+}
+
+const GLOBAL_SOURCE_SPECS = {
+  fearGreed: ['Fear & Greed', 'https://api.alternative.me/fng/?limit=1', { maxAgeMs: 48 * HOUR, observedAt: (v) => Number(v?.data?.[0]?.timestamp) * 1000 }],
+  coingeckoGlobal: ['CoinGecko global', 'https://api.coingecko.com/api/v3/global', { maxAgeMs: HOUR, observedAt: (v) => Number(v?.data?.updated_at) * 1000 }]
+};
+
+async function loadSourceGroup(specs) {
+  const entries = Object.entries(specs);
+  const results = await Promise.all(entries.map(([, [name, url, opts]]) => loadSource(name, url, opts)));
+  return Object.fromEntries(entries.map(([key], i) => [key, results[i]]));
+}
+
+// Nguồn theo symbol: TTL = REFRESH_MS, mọi horizon / client của cùng symbol dùng chung.
+function getSymbolSources(symbol) {
+  return cachedLoad(symbolSourceCache, symbol, async () => ({
+    value: await loadSourceGroup(symbolSourceSpecs(symbol)),
+    ttlMs: REFRESH_MS
+  }));
+}
+
+// Nguồn toàn thị trường cập nhật chậm: TTL riêng 5 phút; có nguồn lỗi thì chỉ giữ một chu kỳ REFRESH_MS.
+function getGlobalSources() {
+  return cachedLoad(globalSourceCache, 'global', async () => {
+    const value = await loadSourceGroup(GLOBAL_SOURCE_SPECS);
+    const allOk = Object.values(value).every((s) => s.ok);
+    return { value, ttlMs: allOk ? GLOBAL_FEED_TTL_MS : REFRESH_MS };
+  });
+}
+
+function sourceStatus(s) {
+  const iso = (ms) => (Number.isFinite(ms) && ms > 0 ? new Date(ms).toISOString() : null);
+  return {
+    name: s.name,
+    ok: s.ok,
+    fetchedAt: iso(s.fetchedAt),
+    observedAt: iso(s.observedAt),
+    stale: Boolean(s.stale),
+    error: s.error || null
+  };
+}
+
+// Hợp đồng snapshot ở giai đoạn P0 (docs/REVISED_ROADMAP.md): chưa có xác suất nào qua kiểm định.
+const SNAPSHOT_CONTRACT = {
+  version: 'p0',
+  validatedProbabilities: false,
+  historicalModel: 'disabled',
+  unverifiedFields: {
+    'trend.scenarioProbabilities': 'Điểm heuristic đã chuẩn hoá, không phải xác suất. UI không hiển thị.',
+    'trend.confidence': 'Biến đổi của độ lớn điểm quyết định, không phải xác suất. UI không hiển thị dạng %.',
+    'trend.score': 'Điểm rule-based chưa kiểm định.',
+    'trend.decision': 'Trạng thái từ điểm rule-based chưa kiểm định.',
+    'trend.breakoutLevels': 'Mức theo dõi = close nến trước ± ngưỡng biến động 30 ngày; không phải outcome dự báo.'
+  },
+  note: 'Mô hình kịch bản lịch sử đang tắt (lib/historical.js) vì có leakage và chưa chứng minh skill ngoài mẫu.'
+};
+
+// Kỹ thuật đa khung: W/D/4H/1H lấy từ futures (cùng nguồn với dashboard), khung tháng lấy từ spot
+// vì perpetual mới có từ 2019 (~85 nến tháng), spot có từ 2017 (~112 nến, đủ MA100 tháng).
+const TECHNICAL_FEEDS = [
+  { tf: '1M', base: 'https://api.binance.com/api/v3/klines', interval: '1M', limit: 1000, source: 'Binance spot' },
+  { tf: '1w', base: 'https://fapi.binance.com/fapi/v1/klines', interval: '1w', limit: 400, source: 'Binance USDT-M futures' },
+  { tf: '1d', base: 'https://fapi.binance.com/fapi/v1/klines', interval: '1d', limit: 400, source: 'Binance USDT-M futures' },
+  { tf: '4h', base: 'https://fapi.binance.com/fapi/v1/klines', interval: '4h', limit: 400, source: 'Binance USDT-M futures' },
+  { tf: '1h', base: 'https://fapi.binance.com/fapi/v1/klines', interval: '1h', limit: 400, source: 'Binance USDT-M futures' }
+];
+
+async function loadTechnicals(symbol) {
+  const nowMs = Date.now();
+  const results = await Promise.allSettled(
+    TECHNICAL_FEEDS.map((f) => fetchJson(`${f.base}?symbol=${symbol}&interval=${f.interval}&limit=${f.limit}`, 10000))
+  );
+
+  const byTf = {};
+  const sources = {};
+  const errors = [];
+  TECHNICAL_FEEDS.forEach((feed, i) => {
+    const r = results[i];
+    if (r.status !== 'fulfilled') {
+      errors.push(`Binance klines ${feed.tf} (kỹ thuật) lỗi`);
+      return;
+    }
+    const { candles, closedCount } = klinesToCandles(r.value, nowMs);
+    const summary = summarizeTimeframe(candles, { closedCount });
+    if (!summary) return;
+    byTf[feed.tf] = summary;
+    sources[feed.tf] = feed.source;
+  });
+
+  const payload = { generatedAt: new Date(nowMs).toISOString(), byTf, sources, errors };
+  // Lỗi toàn bộ thì không cache để lần sau thử lại ngay
+  return { value: payload, ttlMs: Object.keys(byTf).length ? TECHNICALS_REFRESH_MS : 0 };
+}
+
+function getTechnicals(symbol) {
+  return cachedLoad(technicalsCache, symbol, () => loadTechnicals(symbol));
+}
+
+const VALID_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
+const VALID_TIMEFRAMES = [4, 8, 12, 24, 72, 168];
+
 async function getSnapshot(symbol = 'BTCUSDT', timeframeHours = 4) {
   const now = new Date().toISOString();
 
-  // Validate symbol
-  const validSymbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
-  if (!validSymbols.includes(symbol)) {
-    throw new Error(`Invalid symbol. Allowed: ${validSymbols.join(', ')}`);
+  if (!VALID_SYMBOLS.includes(symbol)) {
+    throw new Error(`Invalid symbol. Allowed: ${VALID_SYMBOLS.join(', ')}`);
   }
-
-  // Validate timeframeHours
-  const validTimeframes = [4, 8, 12, 24, 72, 168];
-  if (!validTimeframes.includes(timeframeHours)) {
+  if (!VALID_TIMEFRAMES.includes(timeframeHours)) {
     timeframeHours = 4;
   }
-
-  // Calculate candle limit based on timeframe for display
-  const candleLimit = Math.min(timeframeHours, 96);
 
   // Chart luôn hiển thị 3 ngày, không phụ thuộc vào timeframe selector
   const chartLimit1h = 72; // 72 nến 1h = 3 ngày
   const chartLimit4h = 18; // 18 nến 4h = 3 ngày
-
-  // Tính limit cho fetch (cần thêm buffer để tính momentum và chart)
-  const monthCandles4h = Math.ceil((30 * 24) / 4) + 3;
-  const monthCandles1d = 30 + 7;
-  const fetchLimit1h = Math.max(candleLimit, chartLimit1h, 48);
-  const fetchLimit4h = Math.max(candleLimit, chartLimit4h, 48, monthCandles4h);
-  const fetchLimit1d = Math.max(8, monthCandles1d);
-  const fetchLimit1w = 8;
-
-  // Map symbol cho Deribit (BTC/ETH/SOL)
+  // Số nến 1h dùng cho momentum / realized vol, giữ đúng như trước khi gộp fetch theo symbol
+  const statsLimit1h = Math.max(Math.min(timeframeHours, 96), chartLimit1h, 48);
   const deribitCurrency = symbol.replace('USDT', '');
 
-  const [
-    premium,
-    oiNow,
-    oiHist,
-    lsHist,
-    topTraderLs,
-    takerFlow,
-    ticker24h,
-    kline1h,
-    kline4h,
-    kline1d,
-    kline1w,
-    fearGreed,
-    deribit,
-    coingeckoGlobal,
-    usdcEvents,
-    economicCalendar
-  ] = await Promise.allSettled([
-    fetchJson(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol}`),
-    fetchJson(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${symbol}`),
-    fetchJson(`https://fapi.binance.com/futures/data/openInterestHist?symbol=${symbol}&period=1h&limit=7`),
-    fetchJson(`https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${symbol}&period=1h&limit=5`),
-    fetchJson(`https://fapi.binance.com/futures/data/topLongShortPositionRatio?symbol=${symbol}&period=1h&limit=5`),
-    fetchJson(`https://fapi.binance.com/futures/data/takerlongshortRatio?symbol=${symbol}&period=1h&limit=5`),
-    fetchJson(`https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=${symbol}`),
-    fetchJson(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1h&limit=${fetchLimit1h}`),
-    fetchJson(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=4h&limit=${fetchLimit4h}`),
-    fetchJson(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1d&limit=${fetchLimit1d}`),
-    fetchJson(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1w&limit=${fetchLimit1w}`),
-    fetchJson('https://api.alternative.me/fng/?limit=1'),
-    fetchJson(`https://www.deribit.com/api/v2/public/get_book_summary_by_currency?currency=${deribitCurrency}&kind=future`),
-    fetchJson('https://api.coingecko.com/api/v3/global'),
+  const [src, globalSrc, usdc, calendar] = await Promise.all([
+    getSymbolSources(symbol),
+    getGlobalSources(),
     fetchUSDCMintingEvents(),
     fetchEconomicCalendar()
   ]);
 
   const errors = [];
+  const pick = (s, label) => {
+    if (!s.ok) errors.push(label);
+    return s.value;
+  };
 
-  const premiumV = premium.status === 'fulfilled' ? premium.value : null;
-  if (!premiumV) errors.push('Binance premiumIndex lỗi');
+  const premiumV = pick(src.premium, 'Binance premiumIndex lỗi');
+  const oiNowV = pick(src.oiNow, 'Binance openInterest lỗi');
+  const oiHistV = pick(src.oiHist, 'Binance openInterestHist lỗi');
+  const lsHistV = pick(src.lsHist, 'Binance globalLongShort ratio lỗi');
+  const topTraderLsV = pick(src.topTraderLs, 'Binance top trader ratio lỗi');
+  const takerFlowV = pick(src.takerFlow, 'Binance taker flow lỗi');
+  const ticker24hV = pick(src.ticker24h, 'Binance ticker24h lỗi');
+  const kline1hAll = pick(src.kline1h, 'Binance klines lỗi');
+  const kline4hV = pick(src.kline4h, 'Binance klines 4h lỗi');
+  const kline1dV = pick(src.kline1d, 'Binance klines 1d lỗi');
+  const kline1wV = pick(src.kline1w, 'Binance klines 1w lỗi');
+  const fearGreedV = pick(globalSrc.fearGreed, 'Fear&Greed API lỗi');
+  const deribitV = pick(src.deribit, 'Deribit API lỗi');
+  const cgV = pick(globalSrc.coingeckoGlobal, 'CoinGecko global lỗi');
+  if (!usdc.ok) errors.push(`USDC treasury lỗi (đã thử hết nguồn): ${usdc.error}`);
+  if (!calendar.ok) errors.push(`Lịch kinh tế lỗi: ${calendar.error}`);
 
-  const oiNowV = oiNow.status === 'fulfilled' ? oiNow.value : null;
-  if (!oiNowV) errors.push('Binance openInterest lỗi');
-
-  const oiHistV = oiHist.status === 'fulfilled' ? oiHist.value : null;
-  if (!oiHistV) errors.push('Binance openInterestHist lỗi');
-
-  const lsHistV = lsHist.status === 'fulfilled' ? lsHist.value : null;
-  if (!lsHistV) errors.push('Binance globalLongShort ratio lỗi');
-
-  const topTraderLsV = topTraderLs.status === 'fulfilled' ? topTraderLs.value : null;
-  if (!topTraderLsV) errors.push('Binance top trader ratio lỗi');
-
-  const takerFlowV = takerFlow.status === 'fulfilled' ? takerFlow.value : null;
-  if (!takerFlowV) errors.push('Binance taker flow lỗi');
-
-  const ticker24hV = ticker24h.status === 'fulfilled' ? ticker24h.value : null;
-  if (!ticker24hV) errors.push('Binance ticker24h lỗi');
-
-  const kline1hV = kline1h.status === 'fulfilled' ? kline1h.value : null;
-  if (!kline1hV) errors.push('Binance klines lỗi');
-  const kline4hV = kline4h.status === 'fulfilled' ? kline4h.value : null;
-  if (!kline4hV) errors.push('Binance klines 4h lỗi');
-  const kline1dV = kline1d.status === 'fulfilled' ? kline1d.value : null;
-  if (!kline1dV) errors.push('Binance klines 1d lỗi');
-  const kline1wV = kline1w.status === 'fulfilled' ? kline1w.value : null;
-  if (!kline1wV) errors.push('Binance klines 1w lỗi');
-
-  const fearGreedV = fearGreed.status === 'fulfilled' ? fearGreed.value : null;
-  if (!fearGreedV) errors.push('Fear&Greed API lỗi');
-
-  const deribitV = deribit.status === 'fulfilled' ? deribit.value : null;
-  if (!deribitV) errors.push('Deribit API lỗi');
-
-  const cgV = coingeckoGlobal.status === 'fulfilled' ? coingeckoGlobal.value : null;
-  if (!cgV) errors.push('CoinGecko global lỗi');
-
-  const usdcEventsV = usdcEvents.status === 'fulfilled' ? usdcEvents.value : [];
-  const calendarV = economicCalendar.status === 'fulfilled' ? economicCalendar.value : [];
+  const kline1hV = Array.isArray(kline1hAll) ? kline1hAll.slice(-statsLimit1h) : null;
+  const usdcEventsV = usdc.events;
+  const calendarV = calendar.events;
 
   const oiCurrent = num(oiNowV?.openInterest);
   const oiOld = Array.isArray(oiHistV) && oiHistV.length >= 7 ? num(oiHistV[0]?.sumOpenInterest) : null;
@@ -1369,19 +1021,47 @@ async function getSnapshot(symbol = 'BTCUSDT', timeframeHours = 4) {
     deribitOpenInterestUsd: num(dSummary?.open_interest),
     btcMarketCapDominance: num(cgV?.data?.market_cap_percentage?.btc),
     totalMcapUsd: num(cgV?.data?.total_market_cap?.usd),
-    totalVolumeUsd: num(cgV?.data?.total_volume?.usd)
+    totalVolumeUsd: num(cgV?.data?.total_volume?.usd),
+    // Mô hình lịch sử đã cách ly khỏi snapshot (lib/historical.js); giữ key để tương thích.
+    historicalScenarioModel: null
   };
 
+  let technicals = null;
   try {
-    metrics.historicalScenarioModel = await getHistoricalScenarioModel(symbol, tfThresholdMap, metrics);
+    technicals = await getTechnicals(symbol);
+    errors.push(...technicals.errors);
   } catch (err) {
-    errors.push(`Historical scenario model lỗi: ${err.message}`);
-    metrics.historicalScenarioModel = null;
+    errors.push(`Technicals lỗi: ${err.message}`);
   }
+
+  let analysis = null;
+  try {
+    analysis = buildMarketReport({
+      symbol,
+      metrics,
+      technicals,
+      calendar: calendarV || [],
+      usdcEvents: usdcEventsV || [],
+      errors
+    });
+  } catch (err) {
+    errors.push(`Analysis lỗi: ${err.message}`);
+  }
+
+  const sources = [
+    ...Object.values(src).map(sourceStatus),
+    ...Object.values(globalSrc).map(sourceStatus),
+    { name: `USDC treasury (${usdc.source})`, ok: usdc.ok, fetchedAt: usdc.fetchedAt, observedAt: null, stale: usdc.stale, error: usdc.error },
+    { name: 'Lịch kinh tế', ok: calendar.ok, fetchedAt: calendar.fetchedAt, observedAt: null, stale: calendar.stale, error: calendar.error }
+  ];
 
   return {
     generatedAt: now,
+    contract: SNAPSHOT_CONTRACT,
+    sources,
     metrics,
+    technicals,
+    analysis,
     trend: inferTrend(metrics, timeframeHours),
     usdcMinting: usdcEventsV || [],
     economicCalendar: calendarV || [],
@@ -1525,7 +1205,29 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`Dashboard running at http://localhost:${PORT}`);
-  setInterval(refreshAllClients, REFRESH_MS);
-});
+// Xoá cache trong bộ nhớ (dùng cho test).
+function resetCaches() {
+  symbolSourceCache.clear();
+  globalSourceCache.clear();
+  technicalsCache.clear();
+  Object.assign(usdcEventsCache, { events: [], source: 'none', ok: false, error: null, inflight: null, lastAttemptAt: 0, updatedAt: 0 });
+  Object.assign(calendarCache, { events: [], ok: false, error: null, inflight: null, lastAttemptAt: 0, updatedAt: 0 });
+}
+
+function start(port = PORT) {
+  const timer = setInterval(refreshAllClients, REFRESH_MS);
+  server.once('close', () => clearInterval(timer));
+  return new Promise((done) => {
+    server.listen(port, () => {
+      console.log(`Dashboard running at http://localhost:${server.address().port}`);
+      done(server);
+    });
+  });
+}
+
+// Chỉ tự listen khi chạy trực tiếp `node server.js`; import từ test thì không.
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  start();
+}
+
+export { getSnapshot, resetCaches, start, server, sseClients };

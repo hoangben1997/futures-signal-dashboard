@@ -12,8 +12,8 @@
       <div class="decision-bar__primary">
         <span id="outlook-badge" class="outlook-badge">LOADING</span>
         <div class="confidence-meter">
-          <span class="confidence-meter__label">Confidence</span>
-          <span id="confidence-value" class="confidence-meter__value">--%</span>
+          <span class="confidence-meter__label">Cường độ điểm</span>
+          <span id="confidence-value" class="confidence-meter__value">--</span>
         </div>
         <div class="key-metric">
           <span class="key-metric__label">Score</span>
@@ -85,13 +85,45 @@
         </div>
       </section>
 
+      <!-- Multi-timeframe Technicals -->
+      <section class="panel panel--technicals" aria-labelledby="technicals-heading">
+        <header class="panel__header">
+          <div class="panel__header-left">
+            <h2 id="technicals-heading" class="panel__heading">
+              <span class="panel__icon">📐</span>
+              Kỹ thuật đa khung
+            </h2>
+            <div id="technicals-meta" class="panel__meta">--</div>
+          </div>
+        </header>
+        <div id="technicals-table" class="calendar-table">
+          <!-- JS renders here -->
+        </div>
+      </section>
+
+      <!-- DiSSS Analysis -->
+      <section class="panel panel--analysis" aria-labelledby="analysis-heading">
+        <header class="panel__header">
+          <div class="panel__header-left">
+            <h2 id="analysis-heading" class="panel__heading">
+              <span class="panel__icon">🧭</span>
+              Phân tích xu hướng (DiSSS)
+            </h2>
+            <div id="analysis-meta" class="panel__meta">--</div>
+          </div>
+        </header>
+        <div id="analysis-report" class="analysis">
+          <!-- JS renders here -->
+        </div>
+      </section>
+
       <!-- Primary Decision Grid -->
       <div class="grid-decision">
         <!-- Scenarios Panel -->
         <section class="panel panel--scenarios" aria-labelledby="scenarios-heading">
           <h2 id="scenarios-heading" class="panel__heading">
             <span class="panel__icon">📊</span>
-            Scenario Probabilities
+            Kịch bản &amp; mức theo dõi
           </h2>
           <div id="scenario-list" class="scenario-list">
             <!-- JS renders here -->

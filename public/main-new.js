@@ -1,3 +1,12 @@
+import {
+  decisionBarView,
+  historicalModelStatusText,
+  playbookBasisLines,
+  scenarioPanelView,
+  staleSourceAlerts,
+  statisticalNoteText
+} from './legacy-view.js';
+
 // Element references
 const outlookBadgeEl = document.getElementById('outlook-badge');
 const confidenceValueEl = document.getElementById('confidence-value');
@@ -31,6 +40,10 @@ const risksListEl = document.getElementById('risks-list');
 const sourcesListEl = document.getElementById('sources-list');
 const errorsCountEl = document.getElementById('errors-count');
 const errorsListEl = document.getElementById('errors-list');
+const technicalsTableEl = document.getElementById('technicals-table');
+const technicalsMetaEl = document.getElementById('technicals-meta');
+const analysisReportEl = document.getElementById('analysis-report');
+const analysisMetaEl = document.getElementById('analysis-meta');
 
 let pollTimer = null;
 let selectedTf = '1h';
@@ -39,6 +52,7 @@ let selectedTimeframeHours = 4;
 let selectedUsdcFilter = 'MINT';
 let latestSnapshot = null;
 let eventSource = null;
+let lastUsdcData = null;
 
 const nf = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
 const nfInt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
@@ -76,29 +90,17 @@ function timeAgoVi(input) {
 // Render Decision Bar
 function renderDecisionBar(snapshot) {
   const { trend } = snapshot;
+  const view = decisionBarView(trend);
 
-  // Outlook Badge
-  const scoreForOutlook = Number(trend.decision?.score);
-  if (Number.isFinite(scoreForOutlook) && scoreForOutlook >= 0.25) {
-    outlookBadgeEl.textContent = 'BULLISH';
-    outlookBadgeEl.setAttribute('data-outlook', 'BULLISH BIAS');
-  } else if (Number.isFinite(scoreForOutlook) && scoreForOutlook <= -0.25) {
-    outlookBadgeEl.textContent = 'BEARISH';
-    outlookBadgeEl.setAttribute('data-outlook', 'BEARISH BIAS');
-  } else {
-    outlookBadgeEl.textContent = 'SIDEWAYS';
-    outlookBadgeEl.setAttribute('data-outlook', 'SIDEWAYS');
-  }
+  // Badge dùng đúng trend.outlook của backend (cùng ngưỡng với playbook)
+  outlookBadgeEl.textContent = view.badgeText;
+  outlookBadgeEl.setAttribute('data-outlook', view.badgeOutlook);
 
-  // Confidence
-  const confidence = Number(trend.confidence);
-  confidenceValueEl.textContent = Number.isFinite(confidence)
-    ? `${confidence.toFixed(1)}%`
-    : '--%';
+  // Cường độ điểm (0–1), không phải xác suất
+  confidenceValueEl.textContent = view.strengthText;
+  confidenceValueEl.title = view.strengthTitle;
 
-  // Score
-  const score = Number(trend.score);
-  scoreValueEl.textContent = Number.isFinite(score) ? score.toFixed(2) : '--';
+  scoreValueEl.textContent = view.scoreText;
 
   // Signals Count
   const activeRuleSignals = (trend.rules || []).filter((r) => r.pass).length;
@@ -111,106 +113,51 @@ function renderDecisionBar(snapshot) {
   lastUpdatedEl.textContent = time.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
 }
 
-// Render Scenario Probabilities
-function renderScenarios(scenarios, breakoutLevels, scenarioMeta) {
+// Render Scenario panel: chỉ còn mức theo dõi; tỷ lệ heuristic không hiển thị (hợp đồng P0)
+function renderScenarios(trend) {
   scenarioListEl.innerHTML = '';
-  if (!Array.isArray(scenarios) || !scenarios.length) {
-    scenarioListEl.innerHTML = '<p style="color: var(--color-text-tertiary);">No scenario data</p>';
-    return;
-  }
+  const view = scenarioPanelView(trend, selectedTimeframeHours);
 
-  // Render breakout levels first if available
-  if (breakoutLevels && breakoutLevels.currentPrice) {
+  const horizon = document.createElement('p');
+  horizon.className = 'scenario-probability-header';
+  horizon.textContent = view.horizonNote;
+  scenarioListEl.appendChild(horizon);
+
+  if (view.monitoring) {
+    const mv = view.monitoring;
     const levelsBox = document.createElement('div');
     levelsBox.className = 'breakout-levels';
-    levelsBox.innerHTML = `
-      <div class="breakout-levels__header">Ngưỡng xác nhận ${breakoutLevels.timeframeLabel} tiếp theo</div>
-      <div class="breakout-levels__grid">
-        <div class="breakout-level bullish">
-          <div class="breakout-level__label">Đóng trên</div>
-          <div class="breakout-level__price">$${nf.format(breakoutLevels.bullishAbove)}</div>
-          <div class="breakout-level__note">→ Xu hướng tăng</div>
-        </div>
-        <div class="breakout-level bearish">
-          <div class="breakout-level__label">Đóng dưới</div>
-          <div class="breakout-level__price">$${nf.format(breakoutLevels.bearishBelow)}</div>
-          <div class="breakout-level__note">→ Xu hướng giảm</div>
-        </div>
-      </div>
-      <div class="breakout-levels__footer">
-        Nến đóng: $${nf.format(breakoutLevels.basePrice)} | Giá hiện tại: $${nf.format(breakoutLevels.currentPrice)} | Ngưỡng: ±${breakoutLevels.thresholdPct}%
-      </div>
-    `;
+    const header = document.createElement('div');
+    header.className = 'breakout-levels__header';
+    header.textContent = mv.header;
+    const grid = document.createElement('div');
+    grid.className = 'breakout-levels__grid';
+    for (const [cls, label, price] of [['bullish', mv.aboveLabel, mv.above], ['bearish', mv.belowLabel, mv.below]]) {
+      const cell = document.createElement('div');
+      cell.className = `breakout-level ${cls}`;
+      const l = document.createElement('div');
+      l.className = 'breakout-level__label';
+      l.textContent = label;
+      const p = document.createElement('div');
+      p.className = 'breakout-level__price';
+      p.textContent = price;
+      cell.append(l, p);
+      grid.appendChild(cell);
+    }
+    const footer = document.createElement('div');
+    footer.className = 'breakout-levels__footer';
+    footer.textContent = mv.footer;
+    const note = document.createElement('div');
+    note.className = 'breakout-levels__footer';
+    note.textContent = mv.note;
+    levelsBox.append(header, grid, footer, note);
     scenarioListEl.appendChild(levelsBox);
   }
 
-  // Render probability bars
-  const probabilityHeader = document.createElement('div');
-  probabilityHeader.className = 'scenario-probability-header';
-  let headerText = 'Xác suất kịch bản';
-  if (scenarioMeta?.source === 'historical+heuristic') {
-    const n = Number(scenarioMeta.sampleSize || 0);
-    const mode = scenarioMeta.mode === 'conditional' ? 'có điều kiện' : 'không điều kiện';
-    const w = Number(scenarioMeta.historicalWeight || 0);
-    const f = Number(scenarioMeta.formulaScore || 0);
-    headerText += ` (Thống kê 1 năm: n=${n}, ${mode}, w=${w}, f=${f.toFixed(3)})`;
-  }
-  probabilityHeader.textContent = headerText;
-  scenarioListEl.appendChild(probabilityHeader);
-
-  if (scenarioMeta?.drivers) {
-    const metaBox = document.createElement('div');
-    metaBox.className = 'scenario-meta';
-    const driverOrder = ['trend', 'momentum', 'position', 'volatility'];
-    const labels = { trend: 'Trend', momentum: 'Momentum', position: 'Position', volatility: 'Volatility' };
-    const chips = driverOrder.map((k) => {
-      const d = scenarioMeta.drivers[k];
-      if (!d) return null;
-      const edge = Number(d.edge || 0);
-      const tone = edge > 0.01 ? 'bullish' : edge < -0.01 ? 'bearish' : 'neutral';
-      return `<span class="scenario-meta__chip scenario-meta__chip--${tone}">${labels[k]}:${d.state} (${signed(edge, 3)})</span>`;
-    }).filter(Boolean).join('');
-    metaBox.innerHTML = chips;
-    scenarioListEl.appendChild(metaBox);
-  }
-
-  const severityMap = {
-    'Tăng': 'low',
-    'Giảm': 'high',
-    'Sideway': 'info'
-  };
-
-  for (const s of scenarios) {
-    const item = document.createElement('div');
-    item.className = 'scenario-item';
-
-    const label = document.createElement('div');
-    label.className = 'scenario-item__label';
-    label.textContent = s.name;
-
-    const barWrapper = document.createElement('div');
-    barWrapper.className = 'scenario-item__bar-wrapper';
-
-    const bar = document.createElement('div');
-    bar.className = 'scenario-item__bar';
-
-    const fill = document.createElement('div');
-    fill.className = 'scenario-item__fill';
-    fill.style.width = `${s.probability || 0}%`;
-    fill.setAttribute('data-severity', severityMap[s.name] || 'info');
-
-    const percentage = document.createElement('span');
-    percentage.className = 'scenario-item__percentage';
-    percentage.textContent = `${Number(s.probability || 0).toFixed(1)}%`;
-
-    bar.appendChild(fill);
-    bar.appendChild(percentage);
-    barWrapper.appendChild(bar);
-
-    item.appendChild(label);
-    item.appendChild(barWrapper);
-    scenarioListEl.appendChild(item);
-  }
+  const notice = document.createElement('p');
+  notice.className = 'scenario-probability-header';
+  notice.textContent = view.probabilityNotice;
+  scenarioListEl.appendChild(notice);
 }
 
 // Render Playbook
@@ -218,53 +165,7 @@ function renderPlaybook(playbook, basis) {
   playbookTextEl.textContent = playbook || 'No playbook available.';
   if (!playbookBasisEl) return;
   playbookBasisEl.innerHTML = '';
-
-  if (!basis) return;
-
-  const labels = {
-    structure: 'Cấu trúc',
-    derivatives: 'Phái sinh',
-    regime: 'Bối cảnh thị trường',
-    macroTime: 'Vĩ mô/Thời điểm'
-  };
-
-  const lines = [];
-  if (Array.isArray(basis.factors) && basis.factors.length) {
-    const top = basis.factors.slice(0, 3).map((f) =>
-      `${labels[f.key] || f.key}: ${signed(f.component)} × ${f.weight.toFixed(2)} = ${signed(f.contribution, 3)}`
-    );
-    lines.push(`Yếu tố chính: ${top.join(' | ')}`);
-  }
-
-  if (basis.scenario?.source === 'historical+heuristic') {
-    lines.push(
-      `Xác suất: thống kê 1 năm (${basis.scenario.mode === 'conditional' ? 'có điều kiện' : 'không điều kiện'}, n=${basis.scenario.sampleSize}, trọng số=${basis.scenario.historicalWeight})`
-    );
-  } else if (basis.scenario?.source) {
-    lines.push(`Xác suất: ${basis.scenario.source}`);
-  }
-
-  if (basis.confirmation) {
-    lines.push(
-      `Ngưỡng xác nhận ${String(basis.confirmation.timeframe || '').toUpperCase()}: đóng trên ${money(basis.confirmation.bullishAbove)}, đóng dưới ${money(basis.confirmation.bearishBelow)}, ngưỡng ±${basis.confirmation.thresholdPct}%`
-    );
-  }
-
-  if (Array.isArray(basis.activeRules) && basis.activeRules.length) {
-    const ruleText = basis.activeRules
-      .slice(0, 3)
-      .map((r) => `${r.name} (${signed(Number(r.score || 0), 0)})`)
-      .join(' | ');
-    lines.push(`Quy tắc đang tác động: ${ruleText}`);
-  }
-
-  if (basis.decision) {
-    lines.push(
-      `Điểm quyết định: ${signed(Number(basis.decision.score || 0), 3)} | Chênh xác suất (Tăng-Giảm): ${signed(Number(basis.decision.probEdge || 0), 3)} | Tín hiệu xác nhận: ${signed(Number(basis.decision.confirmSignal || 0), 3)} | Hệ số chất lượng: ${Number(basis.decision.qualityAdj || 0).toFixed(3)} | Ngưỡng nhẹ/mạnh: ${Number(basis.decision.thresholds?.weak || 0).toFixed(3)}/${Number(basis.decision.thresholds?.strong || 0).toFixed(3)}`
-    );
-  }
-
-  for (const line of lines) {
+  for (const line of playbookBasisLines(basis)) {
     const item = document.createElement('div');
     item.className = 'playbook-basis__item';
     item.textContent = line;
@@ -333,52 +234,13 @@ function renderMappedTrend(mappedTrend, baseRuleScore) {
   mappedTrendEl.appendChild(list);
 }
 
-function renderBacktestTable(model) {
+function renderBacktestTable(contract) {
   if (!backtestTableEl) return;
   backtestTableEl.innerHTML = '';
-  const byTf = model?.byTimeframe || {};
-  const rows = ['4h', '8h', '12h', '1d', '3d', '1w']
-    .map((tf) => ({ tf, bt: byTf[tf]?.backtest || null }))
-    .filter((x) => x.bt && Number.isFinite(x.bt.testSamples));
-
-  if (!rows.length) {
-    backtestTableEl.innerHTML = '<p style="color: var(--color-text-tertiary);">No backtest stats</p>';
-    return;
-  }
-
-  const box = document.createElement('div');
-  box.className = 'backtest-box';
-  const title = document.createElement('div');
-  title.className = 'backtest-box__title';
-  title.textContent = 'Kiểm định (1 năm, chia theo thời gian)';
-  box.appendChild(title);
-
-  const table = document.createElement('table');
-  table.className = 'backtest-box__table';
-  table.innerHTML = `
-    <thead>
-      <tr>
-        <th>TF</th>
-        <th>Mẫu test</th>
-        <th>Độ đúng%</th>
-        <th>Độ đúng hướng%</th>
-        <th>Brier</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${rows.map((r) => `
-        <tr>
-          <td>${String(r.tf).toUpperCase()}</td>
-          <td>${r.bt.testSamples}</td>
-          <td>${Number(r.bt.top1AccuracyPct || 0).toFixed(1)}</td>
-          <td>${Number(r.bt.directionalAccuracyPct || 0).toFixed(1)}</td>
-          <td>${Number(r.bt.brierScore || 0).toFixed(4)}</td>
-        </tr>
-      `).join('')}
-    </tbody>
-  `;
-  box.appendChild(table);
-  backtestTableEl.appendChild(box);
+  const p = document.createElement('p');
+  p.style.color = 'var(--color-text-tertiary)';
+  p.textContent = historicalModelStatusText(contract);
+  backtestTableEl.appendChild(p);
 }
 
 // Render Close Guides Grid
@@ -484,9 +346,15 @@ function renderChart(snapshot) {
 
 // Render USDC Feed
 function renderUSDCFeed(events) {
+  // Filter by amount > 100M USDC
+  const largeEvents = events.filter((e) => {
+    const amount = Number.isFinite(e.amountUsdc) ? e.amountUsdc : 0;
+    return amount > 100000000;
+  });
+
   const filtered = selectedUsdcFilter === 'all'
-    ? events
-    : events.filter((e) => e.type === selectedUsdcFilter);
+    ? largeEvents
+    : largeEvents.filter((e) => e.type === selectedUsdcFilter);
 
   usdcMetaEl.textContent = `${filtered.length} event${filtered.length !== 1 ? 's' : ''}`;
   usdcFeedEl.innerHTML = '';
@@ -604,16 +472,30 @@ function renderCalendar(events) {
   const tbody = document.createElement('tbody');
   for (const event of events) {
     const row = document.createElement('tr');
-    row.innerHTML = `
-      <td class="calendar-table__date">${event.date || '-'}</td>
-      <td class="calendar-table__time">${event.time || '-'}</td>
-      <td><span class="calendar-table__currency">${event.currency || '-'}</span></td>
-      <td class="calendar-table__title">${event.title || '-'}</td>
-      <td class="calendar-table__impact">${event.impact || '-'}</td>
-      <td class="calendar-table__value calendar-table__value--actual">${event.actual || '-'}</td>
-      <td class="calendar-table__value">${event.forecast || '-'}</td>
-      <td class="calendar-table__value">${event.previous || '-'}</td>
-    `;
+    const cells = [
+      ['calendar-table__date', event.date],
+      ['calendar-table__time', event.time],
+      ['', event.currency, 'calendar-table__currency'],
+      ['calendar-table__title', event.title],
+      ['calendar-table__impact', event.impact],
+      ['calendar-table__value calendar-table__value--actual', event.actual],
+      ['calendar-table__value', event.forecast],
+      ['calendar-table__value', event.previous]
+    ];
+    for (const [tdClass, value, spanClass] of cells) {
+      const td = document.createElement('td');
+      if (tdClass) td.className = tdClass;
+      const text = value === null || value === undefined || value === '' ? '-' : String(value);
+      if (spanClass) {
+        const span = document.createElement('span');
+        span.className = spanClass;
+        span.textContent = text;
+        td.appendChild(span);
+      } else {
+        td.textContent = text;
+      }
+      row.appendChild(td);
+    }
     tbody.appendChild(row);
   }
   table.appendChild(tbody);
@@ -669,6 +551,235 @@ function renderSignalBreakdown(rules) {
   }
 }
 
+// Escape text trước khi ghép vào innerHTML (một số text đến từ nguồn ngoài, vd. tiêu đề lịch kinh tế)
+function esc(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function priceText(v) {
+  if (!Number.isFinite(v)) return '-';
+  return nf.format(v >= 1000 ? Math.round(v) : v);
+}
+
+const STRUCTURE_LABEL = { bullish: 'Tăng', bearish: 'Giảm', mixed: 'Lẫn lộn', unknown: '-' };
+const STACK_LABEL = { bullish: 'Bullish', bearish: 'Bearish', mixed: 'Lẫn lộn', unknown: '-' };
+const TONE_BY_DIRECTION = { bullish: 'bullish', bearish: 'bearish', neutral: 'neutral', no_data: 'neutral' };
+
+// Render bảng kỹ thuật đa khung
+function renderTechnicals(technicals) {
+  if (!technicalsTableEl) return;
+  const byTf = technicals?.byTf || {};
+  const rows = [['1M', 'M'], ['1w', 'W'], ['1d', 'D'], ['4h', '4H'], ['1h', '1H']]
+    .filter(([key]) => byTf[key]);
+  if (!rows.length) {
+    technicalsTableEl.innerHTML = '<p style="color: var(--color-text-tertiary);">Chưa có dữ liệu kỹ thuật</p>';
+    technicalsMetaEl.textContent = '--';
+    return;
+  }
+  const maCell = (t, key) => {
+    const v = t[key];
+    if (!Number.isFinite(v)) return '<td>n/a</td>';
+    const tone = t.price >= v ? 'bullish' : 'bearish';
+    return `<td class="tech-table__ma tech-table__ma--${tone}">${priceText(v)}</td>`;
+  };
+  technicalsTableEl.innerHTML = `
+    <table class="tech-table tech-table--nowrap">
+      <thead>
+        <tr>
+          <th>TF</th><th>Giá</th><th>MA50</th><th>MA100</th><th>MA200</th><th>Thứ tự MA</th>
+          <th>RSI / MA</th><th>MACD hist</th><th>Cấu trúc</th><th>Vol nến đóng</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map(([key, label]) => {
+          const t = byTf[key];
+          const s = t.structure || {};
+          const histUp = Number.isFinite(t.macdHist) && Number.isFinite(t.macdHistPrev) && t.macdHist > t.macdHistPrev;
+          const structure = s.state === 'unknown' || !s.highs
+            ? '-'
+            : `${s.highs}/${s.lows}${s.broken === 'down' ? ' · thủng đáy' : s.broken === 'up' ? ' · vượt đỉnh' : ''}`;
+          return `
+            <tr>
+              <td><strong>${label}</strong></td>
+              <td>${priceText(t.price)}</td>
+              ${maCell(t, 'ma50')}${maCell(t, 'ma100')}${maCell(t, 'ma200')}
+              <td>${STACK_LABEL[t.stack] || '-'}${t.cross50x200?.recent ? ` · ${t.cross50x200.recent.type === 'golden' ? 'golden' : 'death'} cross ${t.cross50x200.recent.barsAgo} nến trước` : ''}</td>
+              <td>${Number.isFinite(t.rsi) ? t.rsi.toFixed(1) : '-'} / ${Number.isFinite(t.rsiMa) ? t.rsiMa.toFixed(1) : '-'}</td>
+              <td class="tech-table__ma--${t.macdHist >= 0 ? 'bullish' : 'bearish'}">${Number.isFinite(t.macdHist) ? signed(t.macdHist) : '-'} ${histUp ? '↑' : '↓'}</td>
+              <td class="tech-table__ma--${TONE_BY_DIRECTION[s.state] || 'neutral'}">${esc(structure)} (${STRUCTURE_LABEL[s.state] || '-'})</td>
+              <td>${Number.isFinite(t.lastClosedVolRatio) ? `${t.lastClosedVolRatio.toFixed(2)}×` : '-'}</td>
+            </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+  const sources = Object.entries(technicals.sources || {}).map(([k, v]) => `${k}: ${v}`).join(' · ');
+  technicalsMetaEl.textContent = `Cập nhật ${timeAgoVi(technicals.generatedAt)} · ${sources}`;
+}
+
+const STATUS_LABEL = { bullish: 'Tăng', bearish: 'Giảm', neutral: 'Trung tính', no_data: 'Thiếu dữ liệu' };
+const KIND_LABEL = { fact: 'dữ liệu', inference: 'suy luận' };
+const TIMING_LABEL = { leading: 'dẫn dắt', coincident: 'trùng hợp', lagging: 'trễ' };
+const CONFIDENCE_LABEL = { low: 'Thấp', medium: 'Trung bình', high: 'Cao' };
+const BIAS_LABEL = { bullish: 'NGHIÊNG TĂNG', bearish: 'NGHIÊNG GIẢM', neutral: 'ĐI NGANG', insufficient: 'CHƯA ĐỦ DỮ LIỆU' };
+
+function listHtml(items, emptyText = 'Không có') {
+  if (!Array.isArray(items) || !items.length) return `<p class="analysis__empty">${esc(emptyText)}</p>`;
+  return `<ul class="analysis__list">${items.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>`;
+}
+
+function chip(text, tone = 'neutral') {
+  return `<span class="scenario-meta__chip scenario-meta__chip--${tone}">${esc(text)}</span>`;
+}
+
+function levelRows(levels, side) {
+  return (levels || []).map((l) => `
+    <tr>
+      <td>${side}</td>
+      <td>${priceText(l.low)}${l.high !== l.low ? `–${priceText(l.high)}` : ''}</td>
+      <td>${signed(l.distancePct)}%</td>
+      <td>${esc(l.strength)}</td>
+      <td>${esc(l.reasons.join(', '))}</td>
+    </tr>`).join('');
+}
+
+// Render báo cáo DiSSS. Giữ trạng thái mở/đóng của các <details> qua mỗi lần cập nhật.
+function renderAnalysis(analysis) {
+  if (!analysisReportEl) return;
+  if (!analysis) {
+    analysisReportEl.innerHTML = '<p style="color: var(--color-text-tertiary);">Chưa có báo cáo phân tích</p>';
+    analysisMetaEl.textContent = '--';
+    return;
+  }
+  const prevDetails = [...analysisReportEl.querySelectorAll('details[data-key]')];
+  const openKeys = new Set(prevDetails.filter((d) => d.open).map((d) => d.dataset.key));
+  const s = analysis.summary;
+  const biasTone = s.bias === 'bullish' ? 'bullish' : s.bias === 'bearish' ? 'bearish' : 'neutral';
+
+  const factorRows = analysis.factorTable.map((f) => `
+    <tr>
+      <td><strong>${esc(f.label)}</strong></td>
+      <td>${chip(STATUS_LABEL[f.status] || f.status, TONE_BY_DIRECTION[f.status])}</td>
+      <td>
+        ${f.evidence.map((e) => `
+          <div class="analysis__evidence">
+            ${esc(e.text)}
+            <span class="analysis__tag">${KIND_LABEL[e.kind] || e.kind} · ${TIMING_LABEL[e.timing] || e.timing}</span>
+          </div>`).join('')}
+        ${f.notes.map((n) => `<div class="analysis__evidence analysis__evidence--note">${esc(n)}</div>`).join('')}
+        ${f.missing.length ? `<div class="analysis__missing">Thiếu: ${esc(f.missing.join('; '))}</div>` : ''}
+      </td>
+    </tr>`).join('');
+
+  const scenarioCards = analysis.scenarios.map((sc) => `
+    <div class="analysis__scenario analysis__scenario--${sc.key}">
+      <div class="analysis__scenario-head">
+        <strong>${esc(sc.name)}</strong>
+        ${chip(`Tin cậy: ${CONFIDENCE_LABEL[sc.confidence] || sc.confidence}`, sc.key === 'bullish' ? 'bullish' : sc.key === 'bearish' ? 'bearish' : 'neutral')}
+        ${Number.isFinite(sc.statisticalProbabilityPct) ? chip(`Thống kê: ${sc.statisticalProbabilityPct}%`) : ''}
+      </div>
+      <div class="analysis__label">Ủng hộ</div>${listHtml(sc.evidenceFor)}
+      <div class="analysis__label">Phản đối</div>${listHtml(sc.evidenceAgainst)}
+      <div class="analysis__label">Xác nhận</div><p>${esc(sc.confirmation)}</p>
+      <div class="analysis__label">Vô hiệu</div><p>${esc(sc.invalidation)}</p>
+      <div class="analysis__label">Vùng quan sát</div>${listHtml(sc.watchZones, 'Chưa xác định')}
+      <div class="analysis__foot">${esc(sc.horizon)} · ${esc(sc.basis)}</div>
+    </div>`).join('');
+
+  const stat = analysis.statisticalModel;
+  const critique = analysis.selfCritique;
+  const cost = analysis.stakes.costModel;
+
+  analysisReportEl.innerHTML = `
+    <div class="analysis__summary">
+      ${chip(BIAS_LABEL[s.bias] || s.bias, biasTone)}
+      ${chip(`Regime: ${s.regimeLabel}`)}
+      ${chip(`Điểm ròng ${signed(s.netScore)} / ±${s.maxScore}`, biasTone)}
+      ${chip(`Tin cậy: ${CONFIDENCE_LABEL[s.confidence] || s.confidence}`)}
+      ${chip(`Độ phủ dữ liệu ${s.coveragePct}%`)}
+      <p class="analysis__summary-text">${esc(s.text)}</p>
+    </div>
+
+    <h3 class="analysis__heading">1–3. Các yếu tố có ảnh hưởng lớn nhất</h3>
+    ${analysis.topFactors.length
+      ? `<div class="scenario-meta">${analysis.topFactors.map((f) => chip(`${f.label}: ${signed(f.contribution, 2)}`, f.direction)).join('')}</div>`
+      : '<p class="analysis__empty">Không có nguồn nào nghiêng rõ.</p>'}
+    <p class="analysis__note">Mỗi nguồn dữ liệu độc lập chỉ góp tối đa ±1 × trọng số; ${analysis.timingMix.leading} dẫn dắt · ${analysis.timingMix.coincident} trùng hợp · ${analysis.timingMix.lagging} trễ.</p>
+
+    <details class="analysis__block" data-key="factors" open>
+      <summary>2. Bảng đánh giá từng nhóm yếu tố</summary>
+      <div class="calendar-table">
+        <table class="tech-table"><thead><tr><th>Nhóm</th><th>Trạng thái</th><th>Bằng chứng</th></tr></thead><tbody>${factorRows}</tbody></table>
+      </div>
+    </details>
+
+    <h3 class="analysis__heading">4. Ba kịch bản (1–7 ngày)</h3>
+    <div class="analysis__scenarios">${scenarioCards}</div>
+    <p class="analysis__note">${esc(statisticalNoteText(stat))}</p>
+
+    <details class="analysis__block" data-key="levels" open>
+      <summary>5. Các vùng giá quan trọng</summary>
+      <div class="calendar-table">
+        <table class="tech-table">
+          <thead><tr><th></th><th>Vùng</th><th>Cách giá</th><th>Cấp độ</th><th>Lý do</th></tr></thead>
+          <tbody>${levelRows([...analysis.keyLevels.resistances].reverse(), 'Kháng cự')}${levelRows(analysis.keyLevels.supports, 'Hỗ trợ')}</tbody>
+        </table>
+      </div>
+    </details>
+
+    <details class="analysis__block" data-key="watch">
+      <summary>6. Tín hiệu cần theo dõi</summary>
+      ${listHtml(analysis.watchSignals)}
+    </details>
+
+    <details class="analysis__block" data-key="critique">
+      <summary>7. Tự phản biện</summary>
+      <div class="analysis__critique">
+        <div><div class="analysis__label">Bull Analyst</div>${listHtml(critique.bull)}</div>
+        <div><div class="analysis__label">Bear Analyst</div>${listHtml(critique.bear)}</div>
+        <div><div class="analysis__label">Quant Analyst</div>${listHtml(critique.quant)}</div>
+        <div><div class="analysis__label">Devil's Advocate</div>${listHtml(critique.devilsAdvocate)}</div>
+        <div><div class="analysis__label">Risk Manager</div>${listHtml(critique.riskManager)}</div>
+        <div><div class="analysis__label">Final Analyst</div><p>${esc(critique.final)}</p></div>
+      </div>
+    </details>
+
+    <details class="analysis__block" data-key="mispricing">
+      <summary>8. Điều thị trường có thể đang định giá sai</summary>
+      ${listHtml(analysis.mispricing, 'Không phát hiện dấu hiệu định giá sai rõ ràng từ dữ liệu hiện có.')}
+    </details>
+
+    <details class="analysis__block" data-key="invalidation" open>
+      <summary>9. Điều kiện khiến toàn bộ nhận định mất hiệu lực</summary>
+      ${listHtml(analysis.globalInvalidation)}
+    </details>
+
+    <details class="analysis__block" data-key="stakes">
+      <summary>Kỷ luật &amp; kiểm chứng</summary>
+      <div class="analysis__label">Dữ liệu còn thiếu</div>${listHtml([...analysis.stakes.missingData, ...analysis.stakes.technicalGaps])}
+      <div class="analysis__label">Rủi ro thiên kiến</div>${listHtml(analysis.stakes.biasRisks)}
+      <div class="analysis__label">Cách kiểm chứng</div>${listHtml(analysis.stakes.validationPlan)}
+      <div class="analysis__label">Chi phí giả lập (giữ ${cost.holdDays} ngày)</div>
+      <p>Phí ${cost.feesRoundTripPct}% + trượt giá ${cost.slippageRoundTripPct}% + funding (long ${cost.fundingCostLongPct ?? '-'}%, short ${cost.fundingCostShortPct ?? '-'}%) → tổng long ${cost.totalLongPct ?? '-'}%, short ${cost.totalShortPct ?? '-'}%.</p>
+      <p class="analysis__note">${esc(cost.note)}</p>
+    </details>
+
+    <p class="analysis__note">10. ${esc(s.text)} — ${esc(analysis.disclaimer)}</p>
+  `;
+
+  // Lần render đầu giữ mặc định trong HTML; các lần sau giữ đúng trạng thái người dùng đã chọn
+  if (prevDetails.length) {
+    for (const d of analysisReportEl.querySelectorAll('details[data-key]')) {
+      d.open = openKeys.has(d.dataset.key);
+    }
+  }
+  analysisMetaEl.textContent = `${analysis.framework} · nến ngày, 1–7 ngày (không đổi theo bộ chọn horizon) · ${new Date(analysis.generatedAt).toISOString().slice(11, 19)} UTC`;
+}
+
 // Render Info Lists
 function renderInfoList(el, countEl, items, fallback) {
   el.innerHTML = '';
@@ -694,23 +805,28 @@ function render(snapshot) {
     latestSnapshot = snapshot;
 
     renderDecisionBar(snapshot);
-    renderScenarios(
-      snapshot.trend.scenarioProbabilities || [],
-      snapshot.trend.breakoutLevels,
-      snapshot.trend.scenarioMeta
-    );
+    renderScenarios(snapshot.trend);
     renderMappedTrend(snapshot.trend.mappedTrend, snapshot.trend.baseRuleScore);
-    renderBacktestTable(snapshot.metrics?.historicalScenarioModel);
+    renderBacktestTable(snapshot.contract);
     renderPlaybook(snapshot.trend.playbook, snapshot.trend.playbookBasis);
     renderChart(snapshot);
-    renderUSDCFeed(snapshot.usdcMinting || []);
+
+    // Only re-render USDC if data changed
+    const currentUsdcData = JSON.stringify(snapshot.usdcMinting || []);
+    if (currentUsdcData !== lastUsdcData) {
+      renderUSDCFeed(snapshot.usdcMinting || []);
+      lastUsdcData = currentUsdcData;
+    }
+
     renderMetrics(snapshot.metrics);
+    renderTechnicals(snapshot.technicals);
+    renderAnalysis(snapshot.analysis);
     renderCalendar(snapshot.economicCalendar || []);
     renderSignalBreakdown(snapshot.trend.rules || []);
 
     renderInfoList(reasonsListEl, reasonsCountEl, snapshot.trend.reasons, 'No strong signals detected.');
     renderInfoList(risksListEl, risksCountEl, snapshot.trend.risks, 'No significant warnings.');
-    renderInfoList(errorsListEl, errorsCountEl, snapshot.errors, 'No errors.');
+    renderInfoList(errorsListEl, errorsCountEl, [...(snapshot.errors || []), ...staleSourceAlerts(snapshot.sources)], 'No errors.');
 
     // Data Sources
     sourcesListEl.innerHTML = '';
@@ -780,6 +896,8 @@ function bindUSDCFilters() {
     }
     if (latestSnapshot) {
       renderUSDCFeed(latestSnapshot.usdcMinting || []);
+      // Update lastUsdcData to reflect current filter state
+      lastUsdcData = JSON.stringify(latestSnapshot.usdcMinting || []);
     }
   });
 }

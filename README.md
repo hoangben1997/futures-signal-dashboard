@@ -44,12 +44,19 @@ Health check endpoint
 ### `GET /api/snapshot`
 Lấy snapshot với query params:
 - `symbol`: BTCUSDT | ETHUSDT | SOLUSDT (default: BTCUSDT)
-- `limit`: 24 | 48 | 96 (default: 24)
+- `timeframe`: horizon (giờ) cho phần rule-based: 4 | 8 | 12 | 24 | 72 | 168 (default: 4)
 
 **Example:**
 ```bash
-curl "http://localhost:7010/api/snapshot?symbol=ETHUSDT&limit=48"
+curl "http://localhost:7010/api/snapshot?symbol=ETHUSDT&timeframe=24"
 ```
+
+Các field mới từ gói P0 (xem `docs/IMPLEMENTATION_PROGRESS.md`):
+- `contract`: hợp đồng hiển thị. `validatedProbabilities: false`, `historicalModel: "disabled"`. `unverifiedFields` liệt kê các field legacy chưa kiểm định (`trend.scenarioProbabilities`, `trend.confidence`, …). Các field này vẫn trả về để tương thích, nhưng **không phải xác suất** và UI không hiển thị chúng dạng %.
+- `sources[]`: trạng thái từng nguồn `{ name, ok, fetchedAt, observedAt, stale, error }`. `observedAt` là thời điểm của điểm dữ liệu mới nhất theo nguồn, `fetchedAt` là lúc server nhận. Nguồn USDC/lịch kinh tế lỗi sau khi thử hết fallback thì `ok: false` và, nếu còn dữ liệu cũ, `stale: true`.
+- `metrics.historicalScenarioModel` luôn `null`: mô hình lịch sử cũ đã được cách ly vào `lib/historical.js` và chỉ dùng để tái lập/debug offline.
+
+Dữ liệu nguồn được cache theo symbol (TTL = `REFRESH_MS`, gộp request trùng). Các horizon và client cùng symbol dùng chung một lần fetch. Fear & Greed và CoinGecko có TTL riêng 5 phút (nguồn lỗi thì chỉ giữ một chu kỳ `REFRESH_MS`).
 
 ### `GET /api/stream` (SSE realtime)
 Streaming endpoint với params tương tự `/api/snapshot`
@@ -70,6 +77,7 @@ Tất cả env variables được quản lý trong file `.env` (copy từ `.env.
 - `PORT`: Server port (default: 7000)
 - `REFRESH_MS`: Chu kỳ refresh dữ liệu backend (default: 5000ms)
 - `USDC_REFRESH_MS`: Chu kỳ refresh riêng cho dữ liệu `USDC TREASURY (72H)` (default: 60000ms)
+- `TECHNICALS_REFRESH_MS`: Chu kỳ lấy lại nến đa khung cho phần kỹ thuật + phân tích DiSSS (default: 60000ms)
 
 ### USDC On-chain Data (Optional)
 - `ETH_RPC_URL`: Ethereum RPC URL (Alchemy/Infura/Ankr) để query on-chain USDC Treasury mint/burn
@@ -101,6 +109,24 @@ Ngoài ra UI có link tham chiếu nhanh:
 - CryptoQuant
 - Deribit stats
 
+## Kỹ thuật đa khung (`lib/indicators.js`)
+
+- Khung W/D/4H/1H lấy 400 nến từ Binance USDT-M futures. Khung tháng lấy từ **spot**, vì perpetual mới có từ 2019 (~85 nến tháng), còn spot có ~112 nến, đủ MA100 tháng. MA200 tháng không tính được.
+- Mỗi khung có: MA50/100/200, thứ tự MA, golden/death cross 50/200, RSI 14 + RSI-MA 14, MACD 12/26/9, volume nến đóng so với trung bình 20 phiên, cấu trúc HH/HL/LH/LL (pivot 3 nến, có phát hiện phá cấu trúc) và Fibonacci theo swing 90 nến.
+- Công thức bám theo Pine Script (EMA/RMA khởi tạo bằng SMA). Đã đối chiếu với TradingView: khớp tới 2 chữ số thập phân (test `khớp TradingView` trong `test/indicators.test.js`).
+- Có cache theo `TECHNICALS_REFRESH_MS`, không gọi lại Binance mỗi lần SSE refresh.
+
+## Phân tích xu hướng DiSSS (`lib/analysis.js`)
+
+Snapshot có thêm `technicals` và `analysis`. `analysis` là báo cáo rule-based (không dùng LLM) theo khung DiSSS: tóm tắt → bảng nhóm yếu tố → yếu tố chính → 3 kịch bản → vùng giá → tín hiệu theo dõi → tự phản biện → định giá sai → điều kiện vô hiệu → kết luận.
+
+Quy tắc chính:
+- Mỗi bằng chứng ghi rõ `fact`/`inference` và `leading`/`coincident`/`lagging`.
+- Bằng chứng cùng nguồn dữ liệu được gộp thành một family, mỗi family chỉ góp tối đa ±1 × trọng số (`FAMILY_WEIGHTS`). Ví dụ 5 chỉ báo giá giảm chỉ tính là −1 cho family "giá dài hạn", không phải −5.
+- **Xác suất bằng số** chỉ hiển thị khi mô hình thống kê lịch sử có Brier thấp hơn mức đoán đều (0,2222). Ngoài trường hợp đó chỉ dùng mức tin cậy thấp / trung bình / cao.
+- Không có nguồn: vĩ mô (DXY, lợi suất, FED), CVD, liquidation heatmap, dòng tiền sàn, tin tức. Các mục này được liệt kê trong `stakes.missingData`, và nhóm vĩ mô luôn ở trạng thái `no_data`.
+- Vùng thanh khoản là suy luận từ đỉnh/đáy swing, không phải heatmap thật.
+
 ## Scoring Logic (Rule-Based)
 
 Logic tính điểm được tách riêng trong `lib/scoring.js` với ~7-10 rules:
@@ -118,7 +144,9 @@ Logic tính điểm được tách riêng trong `lib/scoring.js` với ~7-10 rul
 - Score ≥ 2: **Bullish Bias**
 - Else: **Sideways / High-Noise**
 
-**Confidence:** `min(90, 45 + |score| × 10)`
+**Confidence (`trend.confidence`):** biến đổi của độ lớn điểm quyết định, **không phải xác suất**. Từ gói P0, UI không hiển thị field này. Thanh trên cùng hiển thị "Cường độ điểm" = |`trend.decision.score`| (0–1), và badge lấy đúng `trend.outlook`.
+
+**Xác suất kịch bản (`trend.scenarioProbabilities`):** điểm heuristic được chuẩn hoá cho tổng 100, chưa có định nghĩa outcome và chưa được backtest. UI đã ẩn, panel kịch bản chỉ còn "mức theo dõi" (xem `docs/SYSTEM_AUDIT.md` §3.3).
 
 ## UI Features
 
@@ -129,7 +157,7 @@ Logic tính điểm được tách riêng trong `lib/scoring.js` với ~7-10 rul
 
 ### Sections
 - **Metrics Cards**: Price, Funding, OI, L/S ratios, Fear & Greed, etc.
-- **Trend Panel**: Outlook + Score + Confidence + Playbook
+- **Trend Panel**: Outlook + Score + Cường độ điểm + mức theo dõi + Playbook (không có xác suất)
 - **Trade Alerts**: Cảnh báo với level (danger/warn/info)
 - **Signal Breakdown**: Chi tiết từng rule (pass/fail + score + reason)
 - **Price Chart**: SVG candlestick chart
@@ -146,16 +174,27 @@ Logic tính điểm được tách riêng trong `lib/scoring.js` với ~7-10 rul
 futures-signal-dashboard/
 ├── server.js              # Backend Node.js thuần
 ├── lib/
-│   └── scoring.js         # Logic tính điểm (rule-based)
+│   ├── scoring.js         # Logic tính điểm (rule-based, chưa kiểm định)
+│   ├── indicators.js      # MA/RSI/MACD/swing/fib (công thức theo TradingView)
+│   ├── analysis.js        # Báo cáo DiSSS + tự phản biện
+│   ├── stats.js           # Hàm thống kê nhỏ dùng chung
+│   └── historical.js      # Mô hình kịch bản lịch sử cũ — đã cách ly, chỉ debug offline
+├── test/                  # node --test (npm test), có test qua entry point với fetch giả lập
 ├── public/
-│   ├── index.html         # UI structure
-│   ├── main.js            # Frontend logic
-│   └── styles.css         # Styling
+│   ├── index-new.html     # UI structure
+│   ├── main-new.js        # Frontend logic (ES module)
+│   ├── legacy-view.js     # Dựng text hiển thị phần rule-based (hàm thuần, có test)
+│   └── styles-new.css     # Styling
 ├── package.json
 └── README.md
 ```
 
 ## Testing
+
+### Unit test
+```bash
+npm test   # node --test, zero dependency
+```
 
 ### Quick Test
 ```bash
@@ -212,4 +251,4 @@ curl "http://localhost:7010/api/snapshot?symbol=ETHUSDT&limit=48"
 ---
 
 **Version**: 0.2.0
-**Last Updated**: 2026-03-11
+**Last Updated**: 2026-11-24
