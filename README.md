@@ -206,6 +206,13 @@ node scripts/run-replay.js --dataset data/datasets/BTCUSDT-1d-cutoff-2026-11-24.
 ```
 Report vào `data/reports/`, kết quả hiện tại ở `docs/IMPLEMENTATION_PROGRESS.md`.
 
+Audit dashboard trên dữ liệu thật (tái hiện snapshot mỗi ngày 2020-09 → 2025-11, chấm từng tín hiệu; kết quả ở `docs/AUDIT_RESULT.md`):
+```bash
+node scripts/build-dataset.js --symbol BTCUSDT --interval 1h --cutoff 2026-11-24   # tương tự 4h, 1w, 1M
+node scripts/fetch-audit-inputs.js --cutoff 2026-11-24                              # funding, Fear & Greed, archive OI/LS
+node scripts/run-audit.js
+```
+
 Shadow forward (ghi dự báo baseline mỗi ngày vào `data/shadow/`, không hiển thị lên UI): tự chạy khi `node server.js` (tắt bằng `SHADOW_ENABLED=0`).
 ```bash
 node scripts/shadow.js status   # đã phát hành / trễ / bỏ lỡ / đã chấm
