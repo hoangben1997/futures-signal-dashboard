@@ -198,6 +198,12 @@ node scripts/build-dataset.js --symbol BTCUSDT --interval 1d --cutoff 2026-11-24
 ```
 Ghi vào `data/datasets/` (đã gitignore), kèm manifest có checksum. Spec: `docs/P1_SPEC.md`.
 
+Replay walk-forward (không chạm holdout):
+```bash
+node scripts/run-replay.js --dataset data/datasets/BTCUSDT-1d-cutoff-2026-11-24.jsonl
+```
+Report vào `data/reports/`, kết quả hiện tại ở `docs/IMPLEMENTATION_PROGRESS.md`.
+
 ### Unit test
 ```bash
 npm test   # node --test, zero dependency

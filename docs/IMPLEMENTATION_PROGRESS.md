@@ -10,7 +10,7 @@ Lộ trình đang theo: [REVISED_ROADMAP](REVISED_ROADMAP.md). Phạm vi đượ
 | P0-D. Vận hành: freshness, lỗi upstream, dedup fetch, render calendar | **Xong** | 2026-11-24 |
 | P1-1. Data contract (dataset-v1) | **Xong** | 2026-11-24 |
 | P1-2. Feature/nhãn point-in-time (features-v1, label-ksigma-v1) | **Xong** | 2026-11-24 |
-| P1-3. Replay rolling-origin + baseline | **Chưa bắt đầu** | — |
+| P1-3. Replay rolling-origin + baseline (replay-v1) | **Xong**: ứng viên M1 **không qua cổng** | 2026-11-24 |
 | P1-4. Kiểm archive metrics Binance (OI/LS) | **Chưa bắt đầu** | — |
 | P1 shadow forward | **Chưa bắt đầu** | — |
 
@@ -137,6 +137,32 @@ Test `fail closed …` khẳng định thêm: chèn một hàng chưa kiểm đ�
 | `npm test` | 50 pass / 0 fail |
 
 Chưa xem phân bố nhãn hay bất kỳ kết quả dự báo nào. Đó là bước 3 (replay), cần chốt thêm trước khi chạy: độ dài cửa sổ train, bước refit, kỳ xác nhận giữ lại, chênh loss tối thiểu và quy tắc CI.
+
+## P1 bước 3: replay-v1 (2026-11-24)
+
+Spec được đăng ký và commit **trước** lần chạy đầu (commit `1e368c4`, [P1_SPEC §7](P1_SPEC.md)). Code: `lib/replay.js`, `scripts/run-replay.js`. Report: `data/reports/replay-v1-4d813d15bf8f.json` (sha256 `528720341bfb…`); chạy 2 lần cho cùng report. Mọi lần chạy được ghi vào `data/reports/experiments.jsonl`.
+
+**Phạm vi test:** 1.455 origin (2021-11-30 → 2025-11-23), 48 fold tháng. Holdout (từ 2025-11-24) **chưa chạm**.
+
+| Mô hình | Brier (tổng 3 lớp) | Log loss | BSS so với M0 | CI 90% (block 7) |
+|---|---|---|---|---|
+| M0 climatology trượt 2 năm | 0,6280 | 1,0446 | 0 | — |
+| B2 climatology expanding | 0,6256 | 1,0407 | **+0,38%** | [+0,15%, +0,60%] |
+| G tham chiếu Gauss | 0,6455 | 1,0678 | −2,80% | — |
+| **M1 ứng viên (4 ô trend50 × mom1z)** | 0,6280 | 1,0444 | **−0,003%** | [−0,34%, +0,32%] |
+| NULL (ô ngẫu nhiên) | 0,6305 | 1,0487 | −0,41% | [−0,72%, −0,11%] |
+
+**Kết luận theo cổng đăng ký trước:** M1 **không qua** (BSS ≤ 0, cận dưới CI < 0; chỉ log loss không tệ hơn). Theo spec, không đi tiếp tới holdout. Trạng thái: **chưa đủ bằng chứng** rằng hai feature giá này dự báo được nhãn 24h tốt hơn tần suất lịch sử. Dashboard tiếp tục chỉ mô tả.
+
+**Kiểm tra sức khoẻ pipeline:**
+- Đối chứng null có BSS âm và CI hoàn toàn dưới 0. Nhờ vậy biết pipeline không tạo ra edge giả.
+- Sensitivity theo độ dài block (1/7/30) cho CI gần như nhau.
+- ECE của M1 < 0,03 ở cả 3 lớp.
+
+**Phát hiện cần ghi lại (dữ kiện, không phải để chọn lại spec cho lần này):**
+1. **Tỷ lệ lớp thực tế khác giả định.** Trong tập test, tăng 25,8%, ngang 50,0%, giảm 24,2%. PROBABILITY_MODEL_DESIGN §2 giả định khoảng 31/38/31 (ghi rõ "[Suy luận, sẽ đo lại]"). Nguyên nhân: return ngày BTC có đỉnh nhọn và đuôi dày hơn phân phối chuẩn, nên band ±0,5σ chứa khoảng 50% số ngày. Đây cũng là lý do G thua M0 2,8%.
+2. **Baseline M0 (trượt 2 năm) yếu hơn B2 (expanding)** một cách có ý nghĩa: CI của B2 hoàn toàn dương. Nếu so với B2 thì M1 kém hơn khoảng 0,38%. Đề xuất cho version sau: dùng baseline quyết định mạnh hơn, hoặc so với cả hai.
+3. M1 chọn α = 100 (co mạnh nhất) ở 30/48 fold, nghĩa là ô feature gần như không mang thông tin trong CV nội bộ. BSS theo năm dao động +0,23% (2022) → −0,39% (2024).
 
 ## Quyết định cần chốt trước P1 (theo REVISED_ROADMAP)
 
