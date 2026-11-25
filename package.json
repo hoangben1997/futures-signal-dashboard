@@ -8,6 +8,8 @@
   },
   "scripts": {
     "start": "node server.js",
+    "test": "node --test",
+    "smoke": "node scripts/smoke-ui.js",
     "dev": "node --env-file=.env server.js",
     "dev:7010": "node --env-file=.env server.js"
   }
