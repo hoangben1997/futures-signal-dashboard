@@ -778,7 +778,7 @@ function renderAnalysis(analysis) {
       d.open = openKeys.has(d.dataset.key);
     }
   }
-  analysisMetaEl.textContent = `${analysis.framework} · nến ngày, 1–7 ngày (không đổi theo bộ chọn horizon) · ${new Date(analysis.generatedAt).toISOString().slice(11, 19)} UTC`;
+  analysisMetaEl.textContent = `${analysis.framework} · nến ngày đã đóng, 1–7 ngày (không đổi theo bộ chọn horizon) · ${new Date(analysis.generatedAt).toISOString().slice(11, 19)} UTC`;
 }
 
 // Render Info Lists

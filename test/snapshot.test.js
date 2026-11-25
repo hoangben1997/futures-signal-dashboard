@@ -55,7 +55,8 @@ test('snapshot: giữ số nến 1h dùng cho realized vol theo horizon như tr�
   mock = installMockMarket();
   const s4 = await getSnapshot('BTCUSDT', 4);
   const s168 = await getSnapshot('BTCUSDT', 168);
-  const kl1h = mock.calls.filter((u) => u.pathname === '/fapi/v1/klines' && u.searchParams.get('interval') === '1h' && u.searchParams.get('limit') === '96');
+  // 97 = 96 nến đã đóng + 1 nến đang chạy (bị bỏ khi tính metrics)
+  const kl1h = mock.calls.filter((u) => u.pathname === '/fapi/v1/klines' && u.searchParams.get('interval') === '1h' && u.searchParams.get('limit') === '97');
   assert.equal(kl1h.length, 1);
   assert.equal(s4.history.candles1h.length, 72);
   assert.notEqual(s4.metrics.realizedVol24h, s168.metrics.realizedVol24h);
@@ -212,4 +213,15 @@ test('HTTP: SSE gửi snapshot theo đúng symbol/horizon khi đổi tham số; 
     server.closeAllConnections();
     await new Promise((r) => server.close(r));
   }
+});
+
+test('snapshot: metrics/badge bỏ nến đang chạy (giống audit), chart vẫn hiện nến đang chạy', async () => {
+  mock = installMockMarket();
+  const snap = await getSnapshot('BTCUSDT', 24);
+  const now = Date.now();
+  const lastChart = snap.history.candles1h[snap.history.candles1h.length - 1];
+  assert.ok(Date.parse(lastChart.time) + 3600e3 > now, 'chart có nến 1h đang chạy');
+  // closeNow1h là close của nến 1h đã đóng gần nhất, không phải nến đang chạy
+  assert.equal(snap.metrics.closeNow1h, snap.history.candles1h[snap.history.candles1h.length - 2].close);
+  assert.ok(snap.technicals.byTfClosed && snap.technicals.byTf);
 });

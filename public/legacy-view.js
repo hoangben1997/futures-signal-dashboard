@@ -57,8 +57,8 @@ export function scenarioPanelView(trend = {}, timeframeHours = 4) {
         above: money(b.bullishAbove),
         belowLabel: 'Đóng dưới',
         below: money(b.bearishBelow),
-        footer: `Close nến trước: ${money(b.basePrice)} | Giá hiện tại: ${money(b.currentPrice)} | Ngưỡng: ±${b.thresholdPct}%`,
-        note: 'Mức theo dõi = close nến đã đóng trước đó ± ngưỡng biến động (p75 của 30 ngày). Giá đóng qua mức này không phải outcome dự báo đã kiểm định.'
+        footer: `Gốc ngưỡng: ${money(b.basePrice)} | Giá hiện tại: ${money(b.currentPrice)} | Ngưỡng: ±${b.thresholdPct}%`,
+        note: 'Mức theo dõi = close của nến đóng liền trước nến đóng gần nhất ± ngưỡng biến động (p75 của 30 ngày). Badge và mức này chỉ dùng nến đã đóng, giống phiên bản đã audit. Giá đóng qua mức này không phải outcome dự báo đã kiểm định.'
       }
     : null;
   return {

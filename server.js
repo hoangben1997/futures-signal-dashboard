@@ -7,7 +7,7 @@ import { klinesToCandles, summarizeTimeframe } from './lib/indicators.js';
 import { buildMarketReport } from './lib/analysis.js';
 import { buildMetrics } from './lib/metrics.js';
 import { runShadowCycle } from './lib/shadow-runner.js';
-import { num } from './lib/stats.js';
+import { num, toClosedKlines } from './lib/stats.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PORT = Number(process.env.PORT || 7000);
@@ -715,7 +715,8 @@ const HOUR = 60 * MIN;
 
 // Giới hạn nến theo symbol, cố định cho mọi horizon để các horizon dùng chung một lần fetch.
 // 1h lấy 96 (mức lớn nhất trước đây, horizon 1w); mỗi horizon cắt lại đúng số nến như logic cũ.
-const FETCH_LIMIT_1H = 96;
+// 96 nến đã đóng + 1 nến đang chạy (bị bỏ khi tính metrics)
+const FETCH_LIMIT_1H = 97;
 const FETCH_LIMIT_4H = Math.ceil((30 * 24) / 4) + 3;
 const FETCH_LIMIT_1D = 30 + 7;
 const FETCH_LIMIT_1W = 8;
@@ -818,6 +819,7 @@ async function loadTechnicals(symbol) {
   );
 
   const byTf = {};
+  const byTfClosed = {};
   const sources = {};
   const errors = [];
   TECHNICAL_FEEDS.forEach((feed, i) => {
@@ -830,10 +832,13 @@ async function loadTechnicals(symbol) {
     const summary = summarizeTimeframe(candles, { closedCount });
     if (!summary) return;
     byTf[feed.tf] = summary;
+    // Bản chỉ nến đã đóng cho DiSSS, khớp với dashboard audit (docs/AUDIT_RESULT.md)
+    const closedSummary = summarizeTimeframe(candles.slice(0, closedCount), { closedCount });
+    if (closedSummary) byTfClosed[feed.tf] = closedSummary;
     sources[feed.tf] = feed.source;
   });
 
-  const payload = { generatedAt: new Date(nowMs).toISOString(), byTf, sources, errors };
+  const payload = { generatedAt: new Date(nowMs).toISOString(), byTf, byTfClosed, sources, errors };
   // Lỗi toàn bộ thì không cache để lần sau thử lại ngay
   return { value: payload, ttlMs: Object.keys(byTf).length ? TECHNICALS_REFRESH_MS : 0 };
 }
@@ -892,7 +897,13 @@ async function getSnapshot(symbol = 'BTCUSDT', timeframeHours = 4) {
   if (!usdc.ok) errors.push(`USDC treasury lỗi (đã thử hết nguồn): ${usdc.error}`);
   if (!calendar.ok) errors.push(`Lịch kinh tế lỗi: ${calendar.error}`);
 
-  const kline1hV = Array.isArray(kline1hAll) ? kline1hAll.slice(-statsLimit1h) : null;
+  // Metrics/badge chỉ dùng nến ĐÃ ĐÓNG, giống dashboard audit (docs/AUDIT_RESULT.md). Chart vẫn hiện nến đang chạy.
+  const nowMs = Date.now();
+  const closedOrNull = (k) => (Array.isArray(k) ? toClosedKlines(k, nowMs) : null);
+  const kline1hV = Array.isArray(kline1hAll) ? toClosedKlines(kline1hAll, nowMs).slice(-statsLimit1h) : null;
+  const kline4hClosed = closedOrNull(kline4hV);
+  const kline1dClosed = closedOrNull(kline1dV);
+  const kline1wClosed = closedOrNull(kline1wV);
   const usdcEventsV = usdc.events;
   const calendarV = calendar.events;
 
@@ -907,9 +918,9 @@ async function getSnapshot(symbol = 'BTCUSDT', timeframeHours = 4) {
     takerFlow: takerFlowV,
     ticker24h: ticker24hV,
     kline1h: kline1hV,
-    kline4h: kline4hV,
-    kline1d: kline1dV,
-    kline1w: kline1wV,
+    kline4h: kline4hClosed,
+    kline1d: kline1dClosed,
+    kline1w: kline1wClosed,
     fearGreed: fearGreedV,
     deribit: deribitV,
     coingeckoGlobal: cgV
@@ -939,7 +950,8 @@ async function getSnapshot(symbol = 'BTCUSDT', timeframeHours = 4) {
     analysis = buildMarketReport({
       symbol,
       metrics,
-      technicals,
+      // DiSSS chấm trên nến đã đóng (như audit); bảng kỹ thuật trên UI vẫn dùng bản live `technicals.byTf`
+      technicals: technicals ? { ...technicals, byTf: technicals.byTfClosed || technicals.byTf } : null,
       calendar: calendarV || [],
       usdcEvents: usdcEventsV || [],
       sourceHealth,
@@ -967,7 +979,7 @@ async function getSnapshot(symbol = 'BTCUSDT', timeframeHours = 4) {
     usdcMinting: usdcEventsV || [],
     economicCalendar: calendarV || [],
     history: {
-      candles1h: normalizeCandles(kline1hV, chartLimit1h),
+      candles1h: normalizeCandles(kline1hAll, chartLimit1h),
       candles4h: normalizeCandles(kline4hV, chartLimit4h),
       oi1h7: Array.isArray(oiHistV)
         ? oiHistV.map((x) => ({ time: new Date(x.timestamp).toISOString(), value: num(x.sumOpenInterest) }))
