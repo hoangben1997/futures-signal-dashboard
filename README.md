@@ -206,6 +206,11 @@ node scripts/run-replay.js --dataset data/datasets/BTCUSDT-1d-cutoff-2026-11-24.
 ```
 Report vào `data/reports/`, kết quả hiện tại ở `docs/IMPLEMENTATION_PROGRESS.md`.
 
+Ứng viên giá × OI (replay-v2-oi; chỉ chạy holdout nếu qua cổng, và chỉ một lần):
+```bash
+node scripts/run-replay-oi.js
+```
+
 Audit dashboard trên dữ liệu thật (tái hiện snapshot mỗi ngày 2020-09 → 2025-11, chấm từng tín hiệu; kết quả ở `docs/AUDIT_RESULT.md`):
 ```bash
 node scripts/build-dataset.js --symbol BTCUSDT --interval 1h --cutoff 2026-11-24   # tương tự 4h, 1w, 1M

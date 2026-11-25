@@ -13,6 +13,7 @@ Lộ trình đang theo: [REVISED_ROADMAP](REVISED_ROADMAP.md). Phạm vi đượ
 | P1-3. Replay rolling-origin + baseline (replay-v1) | **Xong**: ứng viên M1 **không qua cổng** | 2026-11-24 |
 | P1-4. Kiểm archive metrics Binance (OI/LS) | **Xong**: OI/Global L/S/taker đủ từ 2020-09, top trader loại, **không cần collector** ([P1_ARCHIVE_CHECK](P1_ARCHIVE_CHECK.md)) | 2026-11-24 |
 | Audit dashboard trên dữ liệu thật (dashboard-audit-v1) | **Xong**: không tín hiệu nào sai có ý nghĩa; badge đúng hướng yếu nhưng ổn định. Post-hoc: bỏ hướng của sentiment/volume trong DiSSS; giữ F&G ở badge vì bỏ đi làm badge kém hơn ([AUDIT_RESULT](AUDIT_RESULT.md)) | 2026-11-25 |
+| P2. Ứng viên giá × OI (replay-v2-oi) | **Xong**: **không qua cổng**, holdout chưa chạm | 2026-11-25 |
 | P1 shadow forward (shadow-v1) | **Đang chạy** từ origin 2026-11-23 (dự báo đầu là late vì bật lúc 17h UTC) | 2026-11-24 |
 
 Lưu ý: working tree đã có thay đổi chưa commit từ trước phiên này (README, `server.js`, `public/*-new.*`, `lib/analysis.js`, `lib/indicators.js`, `test/`). `git diff` vì vậy gộp cả hai phần. Chưa commit theo quy ước repo.
@@ -110,7 +111,7 @@ Test `fail closed …` khẳng định thêm: chèn một hàng chưa kiểm đ�
 2. **Field legacy vẫn có trong API** (`trend.scenarioProbabilities`, `trend.confidence`) và được đánh dấu trong `contract.unverifiedFields`. Chưa biết có consumer nào ngoài repo hay không. Đề xuất: xoá khi có ma trận xác suất kiểm định (P3).
 3. **Momentum và closeChange vẫn dùng nến đang chạy** (incomplete candle). Theo roadmap, việc này chuyển vào pipeline point-in-time của P1 thay vì sửa lẻ ở legacy.
 4. **Ingestion vẫn gắn với request/SSE:** không có client thì không fetch, các nhóm SSE vẫn xử lý tuần tự. Việc tách timer và watermark nến đóng thuộc P1 (shadow forward).
-5. USDC khi stale vẫn dùng sự kiện của cửa sổ 72h tại lần fetch thành công cuối. Ngưỡng hiển thị > 100M chỉ áp ở frontend, còn DiSSS dùng feed đầy đủ (INDEPENDENT_REVIEW §2, chưa nằm trong P0).
+5. USDC khi stale vẫn dùng sự kiện của cửa sổ 72h tại lần fetch thành công cuối. ~~Ngưỡng > 100M chỉ áp ở frontend mà không nói rõ.~~ **Đã xử lý 2026-11-25:** panel ghi rõ "N event > 100M / M tổng (DiSSS tính toàn bộ)".
 6. ~~DiSSS "độ phủ dữ liệu" lẫn thiếu dữ liệu với dữ liệu trung tính.~~ **Đã xử lý 2026-11-24:** `familyAvailability()` đo độ sẵn có riêng (available/stale/missing, lấy từ `sourceHealth` server truyền vào; feed USDC rỗng hợp lệ vẫn tính là có dữ liệu). Summary tách thành `dataAvailablePct`, `freshDataPct` và `activeEvidencePct`; key `coveragePct` cũ đã bỏ (chỉ UI trong repo dùng). Kết luận "chưa đủ dữ liệu" và độ tin cậy dựa trên `freshDataPct`. Ví dụ BTC lúc kiểm: dữ liệu mới 100%, nghiêng một phía 44%.
 7. ~~Server `listen` trên mọi interface.~~ **Đã xử lý 2026-11-24:** mặc định bind `127.0.0.1`, đổi bằng env `HOST`. Test HTTP kiểm `server.address().address`.
 8. Ngưỡng stale theo nguồn (ví dụ F&G 48h, oiHist 2h) là lựa chọn vận hành, dễ đổi (`symbolSourceSpecs`/`GLOBAL_SOURCE_SPECS` trong `server.js`).
@@ -164,6 +165,21 @@ Spec được đăng ký và commit **trước** lần chạy đầu (commit `1e
 1. **Tỷ lệ lớp thực tế khác giả định.** Trong tập test, tăng 25,8%, ngang 50,0%, giảm 24,2%. PROBABILITY_MODEL_DESIGN §2 giả định khoảng 31/38/31 (ghi rõ "[Suy luận, sẽ đo lại]"). Nguyên nhân: return ngày BTC có đỉnh nhọn và đuôi dày hơn phân phối chuẩn, nên band ±0,5σ chứa khoảng 50% số ngày. Đây cũng là lý do G thua M0 2,8%.
 2. **Baseline M0 (trượt 2 năm) yếu hơn B2 (expanding)** một cách có ý nghĩa: CI của B2 hoàn toàn dương. Nếu so với B2 thì M1 kém hơn khoảng 0,38%. Đề xuất cho version sau: dùng baseline quyết định mạnh hơn, hoặc so với cả hai.
 3. M1 chọn α = 100 (co mạnh nhất) ở 30/48 fold, nghĩa là ô feature gần như không mang thông tin trong CV nội bộ. BSS theo năm dao động +0,23% (2022) → −0,39% (2024).
+
+## P2: replay-v2-oi (2026-11-25)
+
+Spec đăng ký trước: [P1_SPEC §9](P1_SPEC.md) (commit `71886c8`). Code: `lib/replay-oi.js`, `scripts/run-replay-oi.js`. Report: `data/reports/replay-v2-oi.json` (sha256 `7ab58d7c5156…`); chạy 2 lần cho cùng kết quả.
+
+| Mô hình (1.177 origin, 2022-08-31 → 2025-11-23) | Brier | Log loss | BSS so với B2 | CI 90% (block 7) |
+|---|---|---|---|---|
+| B2 climatology expanding (baseline) | 0,6267 | 1,0418 | 0 | — |
+| **M1 góc phần tư giá × OI 24h** | 0,6278 | 1,0435 | **−0,18%** | [−0,44%, +0,08%] |
+| NULL (ô ngẫu nhiên) | 0,6267 | 1,0416 | 0,00% | [−0,35%, +0,33%] |
+| G (Gauss) | 0,6459 | 1,0684 | −3,06% | — |
+
+**Kết luận:** không qua cổng (cả 3 điều kiện đều trượt). Theo spec, **holdout không chạy** và vẫn còn nguyên cho ứng viên sau. α = 100 (co mạnh nhất) ở 33/39 fold: ô giá × OI gần như không mang thông tin. Nhóm OI của DiSSS từng đúng hướng trong audit, nhưng đó là một cách dựng khác: OI 6h có ngưỡng ±2%, chỉ kích hoạt khoảng 250 ngày. Không thử thêm biến thể trên cùng dữ liệu để tránh data-snooping.
+
+**Tổng kết hướng dự báo sau 2 ứng viên:** cả feature giá (replay-v1) lẫn giá × OI (replay-v2) đều không dự báo được nhãn 24h tốt hơn tần suất lịch sử. Đúng với điều kiện dừng trong roadmap: dashboard giữ vai trò **mô tả**. Shadow baseline vẫn chạy để có bằng chứng forward. Chỉ mở ứng viên mới khi có giả thuyết với dữ liệu khác hẳn (không phải biến thể của giá/OI ngày).
 
 ## P1 shadow forward (2026-11-24)
 

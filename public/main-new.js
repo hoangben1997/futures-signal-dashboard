@@ -356,7 +356,8 @@ function renderUSDCFeed(events) {
     ? largeEvents
     : largeEvents.filter((e) => e.type === selectedUsdcFilter);
 
-  usdcMetaEl.textContent = `${filtered.length} event${filtered.length !== 1 ? 's' : ''}`;
+  // Panel chỉ hiện sự kiện > 100M; DiSSS (nhóm on-chain) tính mint/burn ròng trên toàn bộ feed 72h.
+  usdcMetaEl.textContent = `${filtered.length} event${filtered.length !== 1 ? 's' : ''} > 100M / ${events.length} tổng (DiSSS tính toàn bộ)`;
   usdcFeedEl.innerHTML = '';
 
   if (!filtered || !filtered.length) {
