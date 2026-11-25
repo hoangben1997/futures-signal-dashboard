@@ -190,7 +190,9 @@ Spec: [P1_SPEC §8](P1_SPEC.md). Code: `lib/shadow.js` (thuần), `lib/shadow-ru
 - Chạy thật: chu kỳ đầu ghi `start` + dự báo origin 2026-11-23 (late, phát hành 16:59 UTC). Chạy lại không ghi gì. `dataFingerprint` của dự báo trùng sha256 dataset đã đóng băng.
 - `npm test`: 71 pass / 0 fail.
 
-**Giới hạn:** shadow chỉ chạy khi server đang chạy, không có service hệ thống. Cần khoảng 30 dự báo đúng hạn đã chấm mới đọc được số sơ bộ, và vài trăm mới đủ để kết luận (VALIDATION_STRATEGY §5).
+**Vận hành (cập nhật 2026-11-25):** đã cài LaunchAgent `local.futures-signal-dashboard` (`scripts/launchd.sh`): tự chạy khi đăng nhập, tự khởi động lại khi tiến trình chết (đã thử kill: chạy lại, không ghi trùng). Máy ngủ hoặc tắt trong khung 00:00–01:00 UTC thì origin đó vẫn thành late hoặc missed. Smoke test UI: `npm run smoke` (8/8 pass). Code đã merge vào `main` (PR #1).
+
+**Giới hạn:** Cần khoảng 30 dự báo đúng hạn đã chấm mới đọc được số sơ bộ, và vài trăm mới đủ để kết luận (VALIDATION_STRATEGY §5).
 
 ## Quyết định cần chốt trước P1 (theo REVISED_ROADMAP)
 
