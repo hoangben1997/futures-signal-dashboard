@@ -116,10 +116,41 @@ Duyệt ngày 2026-11-24. Chỉ ghi vào `data/shadow/`, **không hiển thị l
 - **Resolver:** chấm khi nến target đã đóng. Nếu `issuedAt ≥ knownAt` thì bản ghi bị đánh dấu không hợp lệ.
 - **Vận hành:** timer chạy trong server mỗi 5 phút (`SHADOW_INTERVAL_MS`). Chỉ chạy khi start bằng `node server.js`; tắt bằng `SHADOW_ENABLED=0`. Máy tắt hoặc ngủ thì các origin đó thành late hoặc missed và được ghi rõ, không bị bỏ qua lặng lẽ.
 
+## 9. Replay ứng viên OI (`replay-v2-oi`), đăng ký trước khi chạy
+
+Chốt 2026-11-25, trước lần chạy đầu. **Tính chất:** giai đoạn phát triển (2020-09 → 2025-11) đã được dashboard audit nhìn qua, và audit thấy nhóm OI của DiSSS đúng hướng. Vì vậy kết quả trên giai đoạn này **chỉ là thăm dò**. **Xác nhận thật là holdout** (origin 2025-11-24 → 2026-11-23), chưa được bất kỳ bước nào dùng tới.
+
+**Ứng viên:** góc phần tư giá × OI, một trục dữ liệu mới so với replay-v1.
+- `oiChg24 = ln(OI_now / OI_24h)`.
+  - `OI_now`: snapshot archive mới nhất trước origin, không quá 2h.
+  - `OI_24h`: snapshot mới nhất tại hoặc trước `origin − 24h`, không quá 1h.
+- Ô: `s = [mom1z ≥ 0] × [oiChg24 ≥ 0]` (4 ô). Ví dụ giá tăng và OI tăng là "tiền mới vào theo chiều tăng".
+- Origin thiếu OI bị loại.
+
+**Baseline quyết định:** **B2**, tức climatology expanding (`(n_k + 1)/(N + 3)` trên mọi nhãn đã biết). replay-v1 cho thấy B2 mạnh hơn M0 trượt 2 năm.
+
+**Mô hình:**
+- `p_k(s) = (n_k(s) + α·p_B2,k)/(N(s) + α)`, đếm trên **toàn bộ** nhãn đã biết tại cutoff (expanding).
+- α thuộc {20, 50, 100}, chọn bằng CV lồng như replay-v1 (180 origin cuối làm validation; hoà thì lấy α lớn hơn).
+
+**Walk-forward:**
+- Refit đầu mỗi tháng; purge `knownAt ≤ cutoff`.
+- Tháng test đầu tiên là tháng đầu có ≥ 730 ngày nhãn có OI trước cutoff (khoảng 09/2022).
+
+**Metric và cổng:** như replay-v1, nhưng so với B2.
+- Cổng đạt khi cả ba: BSS > 0, cận dưới CI 90% (block 7) > 0, và log loss ≤ B2.
+- Đối chứng null: ô ngẫu nhiên.
+
+**Holdout:**
+- **Chỉ khi** qua cổng ở giai đoạn phát triển thì chạy holdout **đúng một lần**, cùng mô hình và cùng cổng.
+- Không qua cổng thì không chạy holdout và kết luận "chưa đủ bằng chứng".
+- Kết quả holdout được ghi lại dù tốt hay xấu.
+
 ## Lịch sử thay đổi
 
 | Ngày | Version | Thay đổi |
 |---|---|---|
 | 2026-11-24 | dataset-v1, sigma-ewma-v1, label-ksigma-v1, features-v1 | Bản đầu |
+| 2026-11-25 | replay-v2-oi | Ứng viên giá × OI so với B2, holdout chạy một lần nếu qua cổng |
 | 2026-11-24 | shadow-v1 | Shadow forward baseline, hạn phát hành 1 giờ |
 | 2026-11-24 | replay-v1 | Đăng ký trước walk-forward, baseline, ứng viên M1, metric, cổng (trước lần chạy đầu) |
