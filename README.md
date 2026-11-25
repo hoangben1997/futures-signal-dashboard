@@ -224,6 +224,16 @@ node scripts/shadow.js status   # đã phát hành / trễ / bỏ lỡ / đã ch
 node scripts/shadow.js run      # chạy một chu kỳ ngay
 ```
 
+Chạy nền tự khởi động khi đăng nhập macOS (LaunchAgent; máy ngủ/tắt thì vẫn không chạy). Khi agent đang chạy, đừng chạy thêm `npm run dev` cùng cổng.
+```bash
+scripts/launchd.sh install | status | logs | uninstall
+```
+
+Smoke test UI thật (Chrome headless + dữ liệu thật, không nằm trong `npm test`):
+```bash
+npm run smoke
+```
+
 ### Unit test
 ```bash
 npm test   # node --test, zero dependency
